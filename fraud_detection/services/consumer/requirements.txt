@@ -1,4 +1,0 @@
-confluent-kafka
-redis
-pydantic
-numpy
