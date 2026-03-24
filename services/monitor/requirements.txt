@@ -1,0 +1,7 @@
+evidently
+confluent-kafka
+redis
+mlflow
+pandas
+pyarrow
+numpy

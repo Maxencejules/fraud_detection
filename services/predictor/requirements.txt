@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+pydantic
+redis
+mlflow
+pandas
+numpy
