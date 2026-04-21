@@ -82,9 +82,3 @@ The tests are intentionally lightweight: they validate core feature engineering 
 - The consumer maintains rolling counts and sums over Redis sorted sets and approximate cardinality over HyperLogLog keys.
 - User-level running statistics are stored in Redis hashes to support amount z-scores and historical chargeback rate features.
 - Dockerfiles are service-specific and assume the repo root as the Docker build context.
-
-## Resume Positioning
-
-Possible resume bullet:
-
-Built a real-time fraud detection platform using Kafka, Redis, FastAPI, MLflow, and Docker; engineered streaming behavioral features, trained and promoted gradient-boosted models, and added drift monitoring plus automated API and feature tests.
