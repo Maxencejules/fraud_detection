@@ -1,0 +1,6 @@
+__pycache__/
+.pytest_cache/
+pytest-cache-files-*/
+reports/*
+!reports/.gitkeep
+data/*.parquet

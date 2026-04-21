@@ -41,9 +41,9 @@ def evaluate(y_test, y_prob, prefix=""):
     metrics = {
         f"{prefix}roc_auc": roc_auc_score(y_test, y_prob),
         f"{prefix}pr_auc": average_precision_score(y_test, y_prob),
-        f"{prefix}f1": f1_score(y_test, y_pred),
-        f"{prefix}precision": precision_score(y_test, y_pred),
-        f"{prefix}recall": recall_score(y_test, y_pred),
+        f"{prefix}f1": f1_score(y_test, y_pred, zero_division=0),
+        f"{prefix}precision": precision_score(y_test, y_pred, zero_division=0),
+        f"{prefix}recall": recall_score(y_test, y_pred, zero_division=0),
         f"{prefix}brier_score_loss": brier_score_loss(y_test, y_prob)
     }
     return metrics
@@ -60,7 +60,8 @@ def train():
     X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
     X_val, X_test, y_val, y_test = train_test_split(X_temp, y_temp, test_size=0.5, stratify=y_temp, random_state=42)
 
-    spw = (y_train == 0).sum() / (y_train == 1).sum()
+    positive_count = max(int((y_train == 1).sum()), 1)
+    spw = int((y_train == 0).sum()) / positive_count
     print(f"Scale Pos Weight: {spw:.2f}")
 
     with mlflow.start_run() as run:

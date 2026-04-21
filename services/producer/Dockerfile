@@ -1,11 +1,14 @@
 FROM python:3.11-slim
 
 WORKDIR /app
+ENV PYTHONPATH=/app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY services/producer/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-# Copy shared code if needed, but for now we'll just copy the service code
-COPY . .
+COPY services/producer /app/services/producer
+COPY shared /app/shared
+COPY data /app/data
 
+WORKDIR /app/services/producer
 CMD ["python", "main.py"]

@@ -1,10 +1,14 @@
 FROM python:3.11-slim
 
 WORKDIR /app
+ENV PYTHONPATH=/app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY services/consumer/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-COPY . .
+COPY services/consumer /app/services/consumer
+COPY shared /app/shared
+COPY data /app/data
 
+WORKDIR /app/services/consumer
 CMD ["python", "main.py"]

@@ -5,3 +5,6 @@ redis
 mlflow
 pandas
 numpy
+scikit-learn
+lightgbm
+xgboost

@@ -1,16 +1,9 @@
-import sys
-import os
 import pytest
 import numpy as np
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock
 from fastapi.testclient import TestClient
 
-# Add services/predictor to sys.path
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "services", "predictor"))
-
-# Mock state and mlflow before importing main
-import main
-from main import app, state
+from services.predictor.main import app, state
 
 @pytest.fixture
 def client():

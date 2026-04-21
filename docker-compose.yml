@@ -131,13 +131,10 @@ services:
     ports:
       - "8000:8000"
     environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       REDIS_URL: redis://redis:6379/0
       MLFLOW_TRACKING_URI: http://mlflow:5000
       MODEL_URI: models:/fraud-detector/Production
     depends_on:
-      kafka:
-        condition: service_healthy
       redis:
         condition: service_healthy
       mlflow:
@@ -156,6 +153,7 @@ services:
       REFERENCE_PATH: /app/data/reference.parquet
     volumes:
       - ./data:/app/data
+      - ./reports:/app/reports
       - ./shared:/app/shared
     depends_on:
       kafka:

@@ -1,18 +1,28 @@
+import asyncio
 import os
 import time
-import asyncio
-import pandas as pd
-import numpy as np
-import mlflow.pyfunc
-import redis.asyncio as aioredis
-from typing import Optional, List
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
 from contextlib import asynccontextmanager
+from typing import Any, Optional
+
+import numpy as np
+import pandas as pd
 import uvicorn
+from fastapi import FastAPI, HTTPException, Response
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, ConfigDict
+
+try:
+    import mlflow
+except ImportError:  # pragma: no cover - exercised in lightweight test envs
+    mlflow = None
+
+try:
+    import redis.asyncio as aioredis
+except ImportError:  # pragma: no cover - exercised in lightweight test envs
+    aioredis = None
 
 # Constants
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI")
 MODEL_URI = os.getenv("MODEL_URI", "models:/fraud-detector/Production")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 THRESHOLD_REVIEW = float(os.getenv("THRESHOLD_REVIEW", "0.4"))
@@ -20,19 +30,33 @@ THRESHOLD_BLOCK = float(os.getenv("THRESHOLD_BLOCK", "0.75"))
 WORKERS = int(os.getenv("WORKERS", "1"))
 
 FEATURE_COLS = [
-    "amount", "amount_log", "amount_zscore", "tx_count_1h", "tx_count_24h",
-    "tx_sum_1h", "tx_sum_24h", "unique_merchants_24h", "unique_countries_7d",
-    "hour_of_day", "day_of_week", "is_weekend", "card_present",
-    "merchant_fraud_rate_30d", "user_chargeback_rate"
+    "amount",
+    "amount_log",
+    "amount_zscore",
+    "tx_count_1h",
+    "tx_count_24h",
+    "tx_sum_1h",
+    "tx_sum_24h",
+    "unique_merchants_24h",
+    "unique_countries_7d",
+    "hour_of_day",
+    "day_of_week",
+    "is_weekend",
+    "card_present",
+    "merchant_fraud_rate_30d",
+    "user_chargeback_rate",
 ]
+
 
 class AppState:
     def __init__(self):
-        self.model = None
+        self.model: Any = None
         self.model_version: str = "unknown"
-        self.redis: Optional[aioredis.Redis] = None
+        self.redis: Optional[Any] = None
+
 
 state = AppState()
+
 
 class InferenceRequest(BaseModel):
     transaction_id: str
@@ -52,34 +76,78 @@ class InferenceRequest(BaseModel):
     merchant_fraud_rate_30d: float
     user_chargeback_rate: float
 
+
 class PredictionResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     transaction_id: str
     fraud_probability: float
     decision: str
     model_version: str
     latency_ms: float
 
-def load_champion_model():
+
+def load_champion_model() -> tuple[Any, str]:
+    if mlflow is None:
+        print("MLflow is not installed. Predictor will start without a model.")
+        return None, "unavailable"
+
+    if MLFLOW_TRACKING_URI:
+        mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+
     print(f"Loading model from {MODEL_URI}...")
     try:
-        model = mlflow.pyfunc.load_model(MODEL_URI)
-        # Attempt to extract version from model metadata if available
-        version = "Production"
-        if hasattr(model, "metadata") and hasattr(model.metadata, "version"):
-            version = model.metadata.version
-        return model, str(version)
-    except Exception as e:
-        print(f"Error loading model: {e}")
+        loaded_model = mlflow.pyfunc.load_model(MODEL_URI)
+        version = getattr(getattr(loaded_model, "metadata", None), "run_id", None) or MODEL_URI
+        return loaded_model, str(version)
+    except Exception as exc:
+        print(f"Error loading model: {exc}")
         return None, "error"
+
+
+def extract_probability(raw_pred: Any) -> float:
+    if hasattr(raw_pred, "to_numpy"):
+        raw_pred = raw_pred.to_numpy()
+
+    arr = np.asarray(raw_pred)
+    if arr.size == 0:
+        raise ValueError("Model returned an empty prediction array")
+
+    if arr.ndim == 0:
+        prob = float(arr.item())
+    elif arr.ndim == 1:
+        if arr.size == 2 and np.all((arr >= 0.0) & (arr <= 1.0)):
+            prob = float(arr[-1])
+        else:
+            prob = float(arr[0])
+    else:
+        first_row = np.asarray(arr[0])
+        if first_row.size == 0:
+            raise ValueError("Model returned an empty prediction row")
+        prob = float(first_row[-1] if first_row.size > 1 else first_row[0])
+
+    return float(np.clip(prob, 0.0, 1.0))
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    state.redis = aioredis.from_url(REDIS_URL, decode_responses=True)
-    state.model, state.model_version = await asyncio.to_thread(load_champion_model)
+    if state.redis is None and aioredis is not None:
+        state.redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+
+    if state.model is None and state.model_version == "unknown":
+        state.model, state.model_version = await asyncio.to_thread(load_champion_model)
+
     yield
-    # Shutdown
-    await state.redis.close()
+
+    redis_client = state.redis
+    if redis_client is not None:
+        if hasattr(redis_client, "aclose"):
+            await redis_client.aclose()
+        elif hasattr(redis_client, "close"):
+            maybe_coro = redis_client.close()
+            if asyncio.iscoroutine(maybe_coro):
+                await maybe_coro
+
 
 app = FastAPI(lifespan=lifespan)
 
@@ -91,21 +159,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 def get_decision(prob: float) -> str:
     if prob < THRESHOLD_REVIEW:
         return "APPROVE"
-    elif prob < THRESHOLD_BLOCK:
+    if prob < THRESHOLD_BLOCK:
         return "REVIEW"
-    else:
-        return "BLOCK"
+    return "BLOCK"
+
 
 @app.get("/health")
 async def health():
     return {
         "model_loaded": state.model is not None,
         "model_version": state.model_version,
-        "status": "healthy"
+        "status": "healthy",
     }
+
 
 @app.post("/reload-model")
 async def reload_model():
@@ -114,51 +184,41 @@ async def reload_model():
         raise HTTPException(status_code=500, detail="Failed to reload model")
     return {"status": "success", "model_version": state.model_version}
 
+
 @app.post("/predict", response_model=PredictionResponse)
-async def predict(request: InferenceRequest):
+async def predict(request: InferenceRequest, response: Response):
     start_time = time.perf_counter()
-    
+
     if state.model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
-    # Prepare DataFrame
-    data = [[getattr(request, col) for col in FEATURE_COLS]]
-    df = pd.DataFrame(data, columns=FEATURE_COLS)
+    df = pd.DataFrame([[getattr(request, col) for col in FEATURE_COLS]], columns=FEATURE_COLS)
 
-    # Run inference in thread pool
     try:
         raw_pred = await asyncio.to_thread(state.model.predict, df)
-        
-        # Handle shapes (n,) and (n, 2)
-        if isinstance(raw_pred, np.ndarray):
-            if raw_pred.ndim == 2 and raw_pred.shape[1] == 2:
-                prob = float(raw_pred[0][1])  # Prob of class 1
-            else:
-                prob = float(raw_pred[0])
-        else:
-            # Assume pandas Series or list
-            prob = float(raw_pred[0])
-            
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Inference error: {str(e)}")
+        prob = extract_probability(raw_pred)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Inference error: {exc}") from exc
 
     decision = get_decision(prob)
     latency_ms = (time.perf_counter() - start_time) * 1000
+    rounded_latency = round(latency_ms, 2)
+    response.headers["X-Latency-Ms"] = f"{rounded_latency:.2f}"
 
-    # Cache result
-    try:
-        cache_val = f"{prob}:{decision}"
-        await state.redis.setex(f"pred:{request.transaction_id}", 3600, cache_val)
-    except Exception as e:
-        print(f"Redis cache error: {e}")
+    if state.redis is not None:
+        try:
+            await state.redis.setex(f"pred:{request.transaction_id}", 3600, f"{prob}:{decision}")
+        except Exception as exc:
+            print(f"Redis cache error: {exc}")
 
     return PredictionResponse(
         transaction_id=request.transaction_id,
         fraud_probability=round(prob, 4),
         decision=decision,
         model_version=state.model_version,
-        latency_ms=round(latency_ms, 2)
+        latency_ms=rounded_latency,
     )
+
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, workers=WORKERS)

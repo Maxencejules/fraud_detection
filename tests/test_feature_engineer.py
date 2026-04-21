@@ -2,17 +2,17 @@ import sys
 import os
 import time
 import math
+import uuid
 import pytest
-import fakeredis
 
-# Add services/consumer to sys.path
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "services", "consumer"))
+sys.path.append(os.path.dirname(__file__))
 
-from main import FeatureEngineer
+from fakes import FakeRedis
+from services.consumer.main import FeatureEngineer
 
 def make_raw_tx(user_id="user_1", amount=100.0, is_fraud=False, merchant_id="m1"):
     return {
-        "transaction_id": str(time.time()),
+        "transaction_id": str(uuid.uuid4()),
         "user_id": user_id,
         "merchant_id": merchant_id,
         "amount": amount,
@@ -27,7 +27,7 @@ def make_raw_tx(user_id="user_1", amount=100.0, is_fraud=False, merchant_id="m1"
 
 @pytest.fixture
 def fe():
-    r = fakeredis.FakeRedis(decode_responses=True)
+    r = FakeRedis(decode_responses=True)
     return FeatureEngineer(r)
 
 def test_basic_features_present(fe):

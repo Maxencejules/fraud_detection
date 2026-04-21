@@ -1,16 +1,19 @@
 FROM python:3.11-slim
 
 WORKDIR /app
+ENV PYTHONPATH=/app
 
-# Install system dependencies for some ML libraries
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY services/predictor/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-COPY . .
+COPY services/predictor /app/services/predictor
+COPY shared /app/shared
+COPY data /app/data
 
+WORKDIR /app/services/predictor
 CMD ["python", "main.py"]
