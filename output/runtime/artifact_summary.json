@@ -1,0 +1,13 @@
+{
+  "run_id": "66a1e0102927432db2d41b52122987d1",
+  "model_dir": "C:\\Users\\USER\\fraud_detection-1\\output\\local_model",
+  "fraud_rate": 0.015,
+  "xgb_pr_auc": 1.0,
+  "lgb_pr_auc": 0.9997874493927124,
+  "ensemble_pr_auc": 0.9999785001719984,
+  "monitor_run_id": "dcee74264a724dcd824a73aaed43b510",
+  "training_experiment_id": "1",
+  "monitor_experiment_id": "2",
+  "report_path": "C:\\Users\\USER\\fraud_detection-1\\reports\\local_drift_report_1777095421.html",
+  "drift_share": 0.3
+}

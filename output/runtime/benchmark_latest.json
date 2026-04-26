@@ -1,0 +1,16 @@
+{
+  "requests_ok": 60,
+  "errors": 0,
+  "mean_ms": 4107.7,
+  "p50_ms": 4110.92,
+  "p95_ms": 4133.96,
+  "p99_ms": 4135.8,
+  "max_ms": 4135.94,
+  "server_mean_ms": 10.92,
+  "server_p50_ms": 9.29,
+  "server_p95_ms": 19.66,
+  "timeout_s": 30.0,
+  "n": 60,
+  "concurrency": 5,
+  "sample_failure": null
+}

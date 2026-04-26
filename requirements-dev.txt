@@ -4,3 +4,6 @@ uvicorn
 pandas
 numpy
 httpx
+pyarrow
+prometheus-client
+requests

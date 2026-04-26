@@ -101,6 +101,8 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       TOPIC_TRANSACTIONS: transactions.raw
+      EMIT_RATE_TPS: ${EMIT_RATE_TPS:-10}
+      FRAUD_RATE: ${FRAUD_RATE:-0.015}
     depends_on:
       kafka:
         condition: service_healthy
@@ -116,6 +118,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       TOPIC_TRANSACTIONS: transactions.raw
       TOPIC_FEATURES: transactions.features
+      TOPIC_DLQ: ${TOPIC_DLQ:-transactions.raw.dlq}
+      METRICS_PORT: ${CONSUMER_METRICS_PORT:-9108}
     depends_on:
       kafka:
         condition: service_healthy
@@ -134,6 +138,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       MLFLOW_TRACKING_URI: http://mlflow:5000
       MODEL_URI: models:/fraud-detector/Production
+      THRESHOLD_REVIEW: ${THRESHOLD_REVIEW:-0.4}
+      THRESHOLD_BLOCK: ${THRESHOLD_BLOCK:-0.75}
     depends_on:
       redis:
         condition: service_healthy
@@ -151,6 +157,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       MLFLOW_TRACKING_URI: http://mlflow:5000
       REFERENCE_PATH: /app/data/reference.parquet
+      REPORT_INTERVAL_S: ${REPORT_INTERVAL_S:-300}
+      BUFFER_THRESHOLD: ${BUFFER_THRESHOLD:-100}
+      BATCH_SIZE: ${BATCH_SIZE:-2000}
+      METRICS_PORT: ${MONITOR_METRICS_PORT:-9109}
     volumes:
       - ./data:/app/data
       - ./reports:/app/reports

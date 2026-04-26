@@ -8,7 +8,7 @@ import pytest
 sys.path.append(os.path.dirname(__file__))
 
 from fakes import FakeRedis
-from services.consumer.main import FeatureEngineer
+from services.consumer.main import FeatureEngineer, build_dead_letter_message
 
 def make_raw_tx(user_id="user_1", amount=100.0, is_fraud=False, merchant_id="m1"):
     return {
@@ -97,3 +97,18 @@ def test_card_not_present_propagated(fe):
     raw["card_present"] = False
     out = fe.compute(raw)
     assert out["card_present"] is False
+
+def test_dead_letter_message_contains_context():
+    payload = build_dead_letter_message(
+        raw_value=b'{"transaction_id":"tx-1"}',
+        error=ValueError("bad payload"),
+        stage="deserialize",
+        topic="transactions.raw",
+        partition=2,
+        offset=42,
+        message_key=b"user_1",
+    )
+    assert '"stage": "deserialize"' in payload
+    assert '"source_topic": "transactions.raw"' in payload
+    assert '"offset": 42' in payload
+    assert '"message_key": "user_1"' in payload

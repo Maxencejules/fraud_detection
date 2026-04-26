@@ -2,3 +2,4 @@ confluent-kafka
 redis
 pydantic
 numpy
+prometheus-client

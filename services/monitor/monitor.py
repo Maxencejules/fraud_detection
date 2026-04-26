@@ -1,8 +1,10 @@
 import json
+import logging
 import os
 import time
 
 import pandas as pd
+from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
 try:
     import mlflow
@@ -26,6 +28,9 @@ try:
 except ImportError:  # pragma: no cover - runtime dependency only
     ColumnMapping = ClassificationPreset = DataDriftPreset = DataQualityPreset = Report = None
 
+from shared.config import CATEGORICAL_FEATURES, MONITOR_EXPERIMENT_NAME, NUMERICAL_FEATURES
+from shared.observability import configure_logging, log_event
+
 # Environment Variables
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 TOPIC_FEATURES = os.getenv("TOPIC_FEATURES", "transactions.features")
@@ -36,24 +41,44 @@ BATCH_SIZE = int(os.getenv("BATCH_SIZE", "2000"))
 REFERENCE_PATH = os.getenv("REFERENCE_PATH", "/app/data/reference.parquet")
 EVIDENTLY_REPORT_DIR = os.getenv("EVIDENTLY_REPORT_DIR", "/app/reports")
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://mlflow:5000")
+METRICS_PORT = int(os.getenv("METRICS_PORT", "9109"))
 
-FEATURE_COLS = [
-    "amount",
-    "amount_log",
-    "amount_zscore",
-    "tx_count_1h",
-    "tx_count_24h",
-    "tx_sum_1h",
-    "tx_sum_24h",
-    "unique_merchants_24h",
-    "unique_countries_7d",
-    "hour_of_day",
-    "day_of_week",
-    "is_weekend",
-    "card_present",
-    "merchant_fraud_rate_30d",
-    "user_chargeback_rate",
-]
+logger = configure_logging("monitor")
+
+REPORTS_CREATED = Counter(
+    "fraud_monitor_reports_created_total",
+    "Number of Evidently drift reports created.",
+)
+MONITOR_ERRORS = Counter(
+    "fraud_monitor_errors_total",
+    "Number of monitoring errors grouped by stage.",
+    ["stage"],
+)
+REDIS_CACHE_MISSES = Counter(
+    "fraud_monitor_prediction_cache_misses_total",
+    "Number of missing prediction cache entries observed while building reports.",
+)
+BUFFER_SIZE = Gauge(
+    "fraud_monitor_buffer_size",
+    "Current number of feature events buffered for drift analysis.",
+)
+LAST_DRIFT_SHARE = Gauge(
+    "fraud_monitor_last_dataset_drift_share",
+    "Last observed dataset drift share from Evidently.",
+)
+REPORT_DURATION = Histogram(
+    "fraud_monitor_report_duration_seconds",
+    "Time spent generating and logging a drift report.",
+    buckets=(0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
+)
+
+
+def _start_metrics_server() -> None:
+    if METRICS_PORT <= 0:
+        return
+
+    start_http_server(METRICS_PORT)
+    log_event(logger, logging.INFO, "metrics_server_started", metrics_port=METRICS_PORT)
 
 
 class DriftMonitor:
@@ -72,26 +97,33 @@ class DriftMonitor:
             if "prediction" not in self.reference_df.columns:
                 self.reference_df["prediction"] = self.reference_df["label"].astype(float)
         else:
-            print(f"Warning: Reference data not found at {REFERENCE_PATH}")
+            log_event(logger, logging.WARNING, "reference_data_missing", reference_path=REFERENCE_PATH)
             self.reference_df = None
 
         os.makedirs(EVIDENTLY_REPORT_DIR, exist_ok=True)
 
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-        mlflow.set_experiment("fraud-monitoring")
+        mlflow.set_experiment(MONITOR_EXPERIMENT_NAME)
 
     def run_report(self):
         if self.reference_df is None or not self.buffer:
             return
 
-        print(f"Running drift report for {len(self.buffer)} samples...")
+        report_start = time.perf_counter()
+        batch_size = min(len(self.buffer), BATCH_SIZE)
+        log_event(logger, logging.INFO, "drift_report_started", batch_size=batch_size)
         current_df = pd.DataFrame(self.buffer[:BATCH_SIZE])
         self.buffer = self.buffer[BATCH_SIZE:]
+        BUFFER_SIZE.set(len(self.buffer))
 
         predictions = []
         for tx_id in current_df["transaction_id"]:
             cache = self.r.get(f"pred:{tx_id}")
-            predictions.append(float(cache.split(":")[0]) if cache else 0.0)
+            if cache:
+                predictions.append(float(cache.split(":")[0]))
+            else:
+                REDIS_CACHE_MISSES.inc()
+                predictions.append(0.0)
 
         current_df["prediction"] = predictions
 
@@ -106,8 +138,8 @@ class DriftMonitor:
         column_mapping = ColumnMapping(
             target="label",
             prediction="prediction",
-            numerical_features=[c for c in FEATURE_COLS if c not in ["is_weekend", "card_present"]],
-            categorical_features=["is_weekend", "card_present", "day_of_week"],
+            numerical_features=NUMERICAL_FEATURES,
+            categorical_features=CATEGORICAL_FEATURES,
         )
 
         report.run(
@@ -126,17 +158,22 @@ class DriftMonitor:
             result = report.as_dict()
             for metric in result.get("metrics", []):
                 if metric.get("metric") == "DatasetDriftMetric":
-                    mlflow.log_metric("dataset_drift_share", metric["result"]["drift_share"])
+                    drift_share = metric["result"]["drift_share"]
+                    LAST_DRIFT_SHARE.set(drift_share)
+                    mlflow.log_metric("dataset_drift_share", drift_share)
                     break
 
         self.last_report_time = time.time()
-        print(f"Report saved and logged: {report_path}")
+        REPORTS_CREATED.inc()
+        REPORT_DURATION.observe(time.perf_counter() - report_start)
+        log_event(logger, logging.INFO, "drift_report_completed", report_path=report_path)
 
 
 def main():
     if Consumer is None:
         raise RuntimeError("monitor service requires confluent-kafka. Install service dependencies before running it.")
 
+    _start_metrics_server()
     monitor = DriftMonitor()
 
     consumer_conf = {
@@ -147,7 +184,7 @@ def main():
     consumer = Consumer(consumer_conf)
     consumer.subscribe([TOPIC_FEATURES])
 
-    print(f"Monitoring service started. Consuming from {TOPIC_FEATURES}...")
+    log_event(logger, logging.INFO, "monitor_started", features_topic=TOPIC_FEATURES)
 
     try:
         while True:
@@ -156,17 +193,26 @@ def main():
             if msg is not None and not msg.error():
                 try:
                     monitor.buffer.append(json.loads(msg.value().decode("utf-8")))
+                    BUFFER_SIZE.set(len(monitor.buffer))
                 except Exception as exc:
-                    print(f"Error parsing message: {exc}")
+                    MONITOR_ERRORS.labels(stage="deserialize").inc()
+                    log_event(logger, logging.ERROR, "feature_message_parse_failed", error=str(exc))
+            elif msg is not None and msg.error():
+                MONITOR_ERRORS.labels(stage="consume").inc()
+                log_event(logger, logging.ERROR, "monitor_consumer_error", error=str(msg.error()))
 
             elapsed = time.time() - monitor.last_report_time
             if (len(monitor.buffer) >= BUFFER_THRESHOLD and elapsed >= REPORT_INTERVAL_S) or (
                 len(monitor.buffer) >= BATCH_SIZE
             ):
-                monitor.run_report()
+                try:
+                    monitor.run_report()
+                except Exception as exc:
+                    MONITOR_ERRORS.labels(stage="report").inc()
+                    log_event(logger, logging.ERROR, "drift_report_failed", error=str(exc))
 
     except KeyboardInterrupt:
-        print("Shutting down...")
+        log_event(logger, logging.INFO, "monitor_shutdown_requested")
     finally:
         consumer.close()
 

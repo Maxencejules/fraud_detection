@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -10,6 +11,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
 try:
     import mlflow
@@ -21,6 +23,9 @@ try:
 except ImportError:  # pragma: no cover - exercised in lightweight test envs
     aioredis = None
 
+from shared.config import FEATURE_COLS
+from shared.observability import configure_logging, log_event
+
 # Constants
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI")
 MODEL_URI = os.getenv("MODEL_URI", "models:/fraud-detector/Production")
@@ -28,24 +33,36 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 THRESHOLD_REVIEW = float(os.getenv("THRESHOLD_REVIEW", "0.4"))
 THRESHOLD_BLOCK = float(os.getenv("THRESHOLD_BLOCK", "0.75"))
 WORKERS = int(os.getenv("WORKERS", "1"))
+logger = configure_logging("predictor")
 
-FEATURE_COLS = [
-    "amount",
-    "amount_log",
-    "amount_zscore",
-    "tx_count_1h",
-    "tx_count_24h",
-    "tx_sum_1h",
-    "tx_sum_24h",
-    "unique_merchants_24h",
-    "unique_countries_7d",
-    "hour_of_day",
-    "day_of_week",
-    "is_weekend",
-    "card_present",
-    "merchant_fraud_rate_30d",
-    "user_chargeback_rate",
-]
+PREDICT_REQUESTS = Counter(
+    "fraud_predict_requests_total",
+    "Prediction requests served by the predictor.",
+    ["decision"],
+)
+PREDICT_ERRORS = Counter(
+    "fraud_predict_errors_total",
+    "Prediction request failures grouped by error type.",
+    ["error_type"],
+)
+PREDICT_LATENCY = Histogram(
+    "fraud_predict_latency_seconds",
+    "Prediction latency for the FastAPI predictor.",
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 1.0, 5.0),
+)
+MODEL_RELOADS = Counter(
+    "fraud_predict_model_reloads_total",
+    "Number of attempted model reloads.",
+    ["status"],
+)
+REDIS_CACHE_ERRORS = Counter(
+    "fraud_predict_redis_cache_errors_total",
+    "Number of Redis cache write failures in the predictor.",
+)
+MODEL_LOADED = Gauge(
+    "fraud_predict_model_loaded",
+    "Whether a serving model is currently loaded.",
+)
 
 
 class AppState:
@@ -89,19 +106,23 @@ class PredictionResponse(BaseModel):
 
 def load_champion_model() -> tuple[Any, str]:
     if mlflow is None:
-        print("MLflow is not installed. Predictor will start without a model.")
+        log_event(logger, logging.WARNING, "model_load_skipped", reason="mlflow_not_installed")
+        MODEL_LOADED.set(0)
         return None, "unavailable"
 
     if MLFLOW_TRACKING_URI:
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
-    print(f"Loading model from {MODEL_URI}...")
+    log_event(logger, logging.INFO, "model_load_started", model_uri=MODEL_URI)
     try:
         loaded_model = mlflow.pyfunc.load_model(MODEL_URI)
         version = getattr(getattr(loaded_model, "metadata", None), "run_id", None) or MODEL_URI
+        MODEL_LOADED.set(1)
+        log_event(logger, logging.INFO, "model_load_succeeded", model_version=str(version))
         return loaded_model, str(version)
     except Exception as exc:
-        print(f"Error loading model: {exc}")
+        MODEL_LOADED.set(0)
+        log_event(logger, logging.ERROR, "model_load_failed", error=str(exc), model_uri=MODEL_URI)
         return None, "error"
 
 
@@ -133,6 +154,7 @@ def extract_probability(raw_pred: Any) -> float:
 async def lifespan(app: FastAPI):
     if state.redis is None and aioredis is not None:
         state.redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+        log_event(logger, logging.INFO, "redis_client_initialized", redis_url=REDIS_URL)
 
     if state.model is None and state.model_version == "unknown":
         state.model, state.model_version = await asyncio.to_thread(load_champion_model)
@@ -177,11 +199,26 @@ async def health():
     }
 
 
+@app.get("/ready")
+async def ready():
+    if state.model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+
+    return {"status": "ready", "model_version": state.model_version}
+
+
+@app.get("/metrics")
+async def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 @app.post("/reload-model")
 async def reload_model():
     state.model, state.model_version = await asyncio.to_thread(load_champion_model)
     if state.model is None:
+        MODEL_RELOADS.labels(status="failed").inc()
         raise HTTPException(status_code=500, detail="Failed to reload model")
+    MODEL_RELOADS.labels(status="success").inc()
     return {"status": "success", "model_version": state.model_version}
 
 
@@ -190,6 +227,7 @@ async def predict(request: InferenceRequest, response: Response):
     start_time = time.perf_counter()
 
     if state.model is None:
+        PREDICT_ERRORS.labels(error_type="model_unavailable").inc()
         raise HTTPException(status_code=503, detail="Model not loaded")
 
     df = pd.DataFrame([[getattr(request, col) for col in FEATURE_COLS]], columns=FEATURE_COLS)
@@ -198,18 +236,39 @@ async def predict(request: InferenceRequest, response: Response):
         raw_pred = await asyncio.to_thread(state.model.predict, df)
         prob = extract_probability(raw_pred)
     except Exception as exc:
+        PREDICT_ERRORS.labels(error_type="inference").inc()
+        log_event(logger, logging.ERROR, "prediction_failed", error=str(exc), transaction_id=request.transaction_id)
         raise HTTPException(status_code=500, detail=f"Inference error: {exc}") from exc
 
     decision = get_decision(prob)
     latency_ms = (time.perf_counter() - start_time) * 1000
     rounded_latency = round(latency_ms, 2)
+    PREDICT_LATENCY.observe(latency_ms / 1000.0)
+    PREDICT_REQUESTS.labels(decision=decision).inc()
     response.headers["X-Latency-Ms"] = f"{rounded_latency:.2f}"
 
     if state.redis is not None:
         try:
             await state.redis.setex(f"pred:{request.transaction_id}", 3600, f"{prob}:{decision}")
         except Exception as exc:
-            print(f"Redis cache error: {exc}")
+            REDIS_CACHE_ERRORS.inc()
+            log_event(
+                logger,
+                logging.ERROR,
+                "redis_cache_error",
+                error=str(exc),
+                transaction_id=request.transaction_id,
+            )
+
+    log_event(
+        logger,
+        logging.INFO,
+        "prediction_served",
+        decision=decision,
+        latency_ms=rounded_latency,
+        model_version=state.model_version,
+        transaction_id=request.transaction_id,
+    )
 
     return PredictionResponse(
         transaction_id=request.transaction_id,

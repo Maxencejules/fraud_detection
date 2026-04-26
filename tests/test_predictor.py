@@ -47,6 +47,17 @@ def test_health(client):
     assert response.json()["model_loaded"] is True
     assert response.json()["model_version"] == "v1-test"
 
+def test_ready_requires_model(client):
+    state.model = None
+    response = client.get("/ready")
+    assert response.status_code == 503
+
+def test_metrics_endpoint_exposed(client):
+    state.model = make_mock_model(0.1)
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert "fraud_predict_requests_total" in response.text
+
 def test_approve_decision(client):
     state.model = make_mock_model(0.05)
     response = client.post("/predict", json=get_base_features())

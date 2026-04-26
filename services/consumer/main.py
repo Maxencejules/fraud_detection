@@ -1,8 +1,12 @@
 import json
+import logging
 import math
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict
+
+from prometheus_client import Counter, Histogram, start_http_server
 
 try:
     import redis
@@ -15,18 +19,105 @@ try:
 except ImportError:  # pragma: no cover - exercised in lightweight test envs
     Consumer = KafkaError = Producer = AdminClient = NewTopic = None
 
+from shared.observability import configure_logging, log_event
+
 # Environment Variables
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_GROUP_ID = os.getenv("KAFKA_GROUP_ID", "feature-engineer-group")
 TOPIC_TRANSACTIONS = os.getenv("TOPIC_TRANSACTIONS", "transactions.raw")
 TOPIC_FEATURES = os.getenv("TOPIC_FEATURES", "transactions.features")
+TOPIC_DLQ = os.getenv("TOPIC_DLQ", f"{TOPIC_TRANSACTIONS}.dlq")
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+METRICS_PORT = int(os.getenv("METRICS_PORT", "9108"))
+
+logger = configure_logging("consumer")
+
+MESSAGES_PROCESSED = Counter(
+    "fraud_consumer_messages_processed_total",
+    "Number of raw transactions successfully converted to feature events.",
+)
+MESSAGES_FAILED = Counter(
+    "fraud_consumer_messages_failed_total",
+    "Number of raw transactions that failed processing.",
+    ["stage"],
+)
+MESSAGES_DLQ = Counter(
+    "fraud_consumer_messages_dlq_total",
+    "Number of raw transactions published to the dead-letter topic.",
+)
+FEATURE_COMPUTE_LATENCY = Histogram(
+    "fraud_consumer_feature_compute_seconds",
+    "Time spent computing features for a raw transaction.",
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 1.0, 5.0),
+)
 
 
 def _as_text(value: Any) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8")
     return str(value)
+
+
+def _start_metrics_server() -> None:
+    if METRICS_PORT <= 0:
+        return
+
+    start_http_server(METRICS_PORT)
+    log_event(logger, logging.INFO, "metrics_server_started", metrics_port=METRICS_PORT)
+
+
+def build_dead_letter_message(
+    raw_value: Any,
+    error: Exception,
+    stage: str,
+    topic: str,
+    partition: int,
+    offset: int,
+    message_key: Any = None,
+) -> str:
+    payload = {
+        "error": str(error),
+        "message_key": _as_text(message_key) if message_key is not None else None,
+        "offset": offset,
+        "original_payload": _as_text(raw_value),
+        "partition": partition,
+        "source_topic": topic,
+        "stage": stage,
+        "ts_utc": datetime.now(timezone.utc).isoformat(),
+    }
+    return json.dumps(payload)
+
+
+def publish_dead_letter(
+    producer: Any,
+    raw_value: Any,
+    error: Exception,
+    stage: str,
+    msg: Any,
+) -> None:
+    payload = build_dead_letter_message(
+        raw_value=raw_value,
+        error=error,
+        stage=stage,
+        topic=msg.topic(),
+        partition=msg.partition(),
+        offset=msg.offset(),
+        message_key=msg.key(),
+    )
+    producer.produce(TOPIC_DLQ, key=msg.key(), value=payload)
+    producer.flush(5)
+    MESSAGES_DLQ.inc()
+    log_event(
+        logger,
+        logging.ERROR,
+        "message_sent_to_dlq",
+        dlq_topic=TOPIC_DLQ,
+        error=str(error),
+        offset=msg.offset(),
+        partition=msg.partition(),
+        source_topic=msg.topic(),
+        stage=stage,
+    )
 
 
 class FeatureEngineer:
@@ -191,10 +282,12 @@ def main():
             "Install service dependencies before running it."
         )
 
+    _start_metrics_server()
     r = redis.from_url(REDIS_URL, decode_responses=True)
     fe = FeatureEngineer(r)
     admin_client = AdminClient({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
     ensure_topic_exists(admin_client, TOPIC_FEATURES)
+    ensure_topic_exists(admin_client, TOPIC_DLQ, num_partitions=3)
 
     consumer_conf = {
         "bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS,
@@ -211,7 +304,15 @@ def main():
     }
     producer = Producer(producer_conf)
 
-    print(f"Consumer started. Subscribed to {TOPIC_TRANSACTIONS}...")
+    log_event(
+        logger,
+        logging.INFO,
+        "consumer_started",
+        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+        dlq_topic=TOPIC_DLQ,
+        features_topic=TOPIC_FEATURES,
+        raw_topic=TOPIC_TRANSACTIONS,
+    )
 
     try:
         while True:
@@ -222,23 +323,35 @@ def main():
                 if msg.error().code() == KafkaError._PARTITION_EOF:
                     continue
 
-                print(f"Consumer error: {msg.error()}")
+                MESSAGES_FAILED.labels(stage="consume").inc()
+                log_event(logger, logging.ERROR, "consumer_error", error=str(msg.error()))
                 break
 
+            raw_value = msg.value()
             try:
-                raw_tx = json.loads(msg.value().decode("utf-8"))
+                raw_tx = json.loads(raw_value.decode("utf-8"))
+            except Exception as exc:
+                MESSAGES_FAILED.labels(stage="deserialize").inc()
+                publish_dead_letter(producer, raw_value, exc, "deserialize", msg)
+                continue
+
+            try:
+                start_time = time.perf_counter()
                 feature_vector = fe.compute(raw_tx)
+                FEATURE_COMPUTE_LATENCY.observe(time.perf_counter() - start_time)
                 producer.produce(
                     TOPIC_FEATURES,
                     key=feature_vector["user_id"],
                     value=json.dumps(feature_vector),
                 )
                 producer.poll(0)
+                MESSAGES_PROCESSED.inc()
             except Exception as exc:
-                print(f"Error processing message: {exc}")
+                MESSAGES_FAILED.labels(stage="transform").inc()
+                publish_dead_letter(producer, raw_value, exc, "transform", msg)
 
     except KeyboardInterrupt:
-        print("Shutting down...")
+        log_event(logger, logging.INFO, "consumer_shutdown_requested")
     finally:
         consumer.close()
         producer.flush()

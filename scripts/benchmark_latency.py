@@ -1,4 +1,5 @@
 import argparse
+import json
 import time
 import random
 import uuid
@@ -73,26 +74,45 @@ def run_benchmark(url: str, n: int, concurrency: int):
     mean = np.mean(latencies)
     max_lat = np.max(latencies)
     
+    result = {
+        "requests_ok": success_count,
+        "errors": error_count,
+        "mean_ms": round(float(mean), 2),
+        "p50_ms": round(float(p50), 2),
+        "p95_ms": round(float(p95), 2),
+        "p99_ms": round(float(p99), 2),
+        "p99_9_ms": round(float(p999), 2),
+        "max_ms": round(float(max_lat), 2),
+        "pass_p99_le_50ms": bool(p99 <= 50.0),
+    }
+
     print("\nBenchmark Results:")
-    print(f"Requests OK: {success_count}")
-    print(f"Errors:      {error_count}")
-    print(f"Mean:        {mean:.2f} ms")
-    print(f"P50:         {p50:.2f} ms")
-    print(f"P95:         {p95:.2f} ms")
-    print(f"P99:         {p99:.2f} ms")
-    print(f"P99.9:       {p999:.2f} ms")
-    print(f"Max:         {max_lat:.2f} ms")
+    print(f"Requests OK: {result['requests_ok']}")
+    print(f"Errors:      {result['errors']}")
+    print(f"Mean:        {result['mean_ms']:.2f} ms")
+    print(f"P50:         {result['p50_ms']:.2f} ms")
+    print(f"P95:         {result['p95_ms']:.2f} ms")
+    print(f"P99:         {result['p99_ms']:.2f} ms")
+    print(f"P99.9:       {result['p99_9_ms']:.2f} ms")
+    print(f"Max:         {result['max_ms']:.2f} ms")
     
-    if p99 <= 50.0:
-        print(f"\nRESULT: PASS (P99={p99:.2f}ms <= 50ms)")
+    if result["pass_p99_le_50ms"]:
+        print(f"\nRESULT: PASS (P99={result['p99_ms']:.2f}ms <= 50ms)")
     else:
-        print(f"\nRESULT: FAIL (P99={p99:.2f}ms > 50ms)")
+        print(f"\nRESULT: FAIL (P99={result['p99_ms']:.2f}ms > 50ms)")
+
+    return result
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://localhost:8000")
     parser.add_argument("--n", type=int, default=2000)
     parser.add_argument("--concurrency", type=int, default=10)
+    parser.add_argument("--json-out")
     args = parser.parse_args()
     
-    run_benchmark(args.url, args.n, args.concurrency)
+    benchmark_result = run_benchmark(args.url, args.n, args.concurrency)
+    if args.json_out:
+        with open(args.json_out, "w", encoding="utf-8") as fh:
+            json.dump(benchmark_result, fh, indent=2)
+        print(f"Saved JSON benchmark report to {args.json_out}")
