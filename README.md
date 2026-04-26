@@ -16,12 +16,12 @@ Artifacts were generated locally on April 25, 2026.
 
 The benchmark caveat matters: the low double-digit millisecond numbers reflect predictor-side inference latency, while the multi-second client timings came from a local non-Docker fallback path after Docker Desktop failed on this machine with a WSL backend error. If you rerun the Compose flow on a healthy Docker host, publish those end-to-end numbers instead.
 
-## Why This Repo Signals Well
+## System Capabilities
 
-- It is not just a notebook plus a classifier. The repo includes Kafka, Redis, FastAPI, MLflow, PostgreSQL, Docker Compose, and automated tests.
-- The system has operational safeguards: a dead-letter topic for bad events, Prometheus metrics, health and readiness endpoints, and drift monitoring.
-- The repo includes both fast unit tests and a full Docker smoke path in GitHub Actions.
-- There is a benchmark harness and a smoke script so you can produce artifacts instead of making vague performance claims.
+- Kafka-based transaction ingestion with Redis-backed online feature state.
+- FastAPI fraud scoring service with MLflow-managed model loading and reload support.
+- Drift and data-quality monitoring with Evidently, plus Prometheus metrics and health endpoints.
+- Docker Compose, smoke testing, benchmarking, and GitHub Actions coverage for reproducible validation.
 
 ## Architecture
 
@@ -118,19 +118,6 @@ python -m pytest -q
 ```
 
 The unit tests are intentionally fast. They validate feature engineering behavior, DLQ payload construction, inference decisions, readiness behavior, and the predictor metrics endpoint without requiring Kafka, Redis, or MLflow to be running.
-
-## What To Show Recruiters
-
-- A short GIF or screenshot sequence of Kafka UI, MLflow runs, `/metrics`, and an Evidently report in `reports/`.
-- A benchmark JSON file plus a one-line summary such as `P99 latency under X ms at Y concurrent requests`.
-- The GitHub Actions run that proves the repo is tested and the stack actually boots.
-- A concise project summary:
-
-`Built a real-time fraud detection system with Kafka, Redis, FastAPI, MLflow, and Evidently, including online feature engineering, automated model promotion, Prometheus metrics, DLQ handling, and CI-backed Docker smoke tests.`
-
-For this repo's current evidence set, a defensible version is:
-
-`Built a real-time fraud detection system with Kafka, Redis, FastAPI, MLflow, and Evidently, with ensemble PR-AUC of 0.99998, predictor-side p95 latency of 19.66 ms, drift reporting, DLQ handling, Prometheus metrics, and CI-backed smoke coverage.`
 
 ## Useful Endpoints
 
