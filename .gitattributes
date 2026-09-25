@@ -1,0 +1,4 @@
+# Normalise line endings; scripts and container files must stay LF even on Windows.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
