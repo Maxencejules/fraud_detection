@@ -148,6 +148,9 @@ def train_ensemble(split: TemporalSplit, seed: int) -> tuple[EnsembleScorer, dic
 
     xgb_model = xgb.XGBClassifier(**xgboost_params(seed))
     xgb_model.fit(x_train, y_train, eval_set=[(x_valid, y_valid)], verbose=False)
+    # Early stopping only records the best round: the booster still holds the extra rounds,
+    # and native prediction (inplace_predict, the saved JSON) would use all of them.
+    xgb_booster = xgb_model.get_booster()[: xgb_model.best_iteration + 1]
 
     lgb_model = lgb.LGBMClassifier(**lightgbm_params(seed))
     lgb_model.fit(
@@ -159,8 +162,9 @@ def train_ensemble(split: TemporalSplit, seed: int) -> tuple[EnsembleScorer, dic
         callbacks=[lgb.early_stopping(50, verbose=False)],
     )
 
+    # LightGBM's booster already predicts with, and saves, only its best iteration.
     uncalibrated = EnsembleScorer(
-        xgb_model.get_booster(), lgb_model.booster_, LogitCalibrator.identity(), FEATURE_COLUMNS
+        xgb_booster, lgb_model.booster_, LogitCalibrator.identity(), FEATURE_COLUMNS
     )
     valid_scores = uncalibrated.raw_scores(to_matrix(split.validation, FEATURE_COLUMNS))
     calibrator = fit_logit_calibration(valid_scores, split.validation["label"].to_numpy())

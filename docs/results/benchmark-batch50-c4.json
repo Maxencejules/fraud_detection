@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-09-25T07:44:35+00:00",
+  "timestamp": "2026-09-25T09:01:42+00:00",
   "target": "http://localhost:8000",
   "endpoint": "/v1/predict/batch",
   "batch_size": 50,
@@ -7,22 +7,22 @@
   "model_version": "1",
   "requests": 400,
   "errors": 0,
-  "wall_seconds": 1.25,
-  "throughput_rps": 320.0,
-  "throughput_tps": 15998.6,
+  "wall_seconds": 1.34,
+  "throughput_rps": 298.6,
+  "throughput_tps": 14929.6,
   "client_latency_ms": {
-    "p50": 12.193,
-    "p95": 16.537,
-    "p99": 19.951,
-    "max": 26.135,
-    "mean": 12.404
+    "p50": 12.847,
+    "p95": 19.112,
+    "p99": 21.795,
+    "max": 33.14,
+    "mean": 13.293
   },
   "server_latency_ms": {
-    "p50": 6.332,
-    "p95": 9.719,
-    "p99": 11.31,
-    "max": 12.315,
-    "mean": 6.38
+    "p50": 6.575,
+    "p95": 10.228,
+    "p99": 12.499,
+    "max": 14.12,
+    "mean": 6.558
   },
   "stream_end_to_end_ms": {
     "window_s": 0.0
