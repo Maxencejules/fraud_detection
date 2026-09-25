@@ -44,6 +44,7 @@ model contract and the API all changed. To upgrade, delete the old stack with it
 - CI with linting, strict type checking, a vulnerability audit and an end-to-end Docker
   Compose job.
 - An architecture document, a model card and an operations runbook.
+- The MIT license.
 
 ### Fixed
 

@@ -181,3 +181,7 @@ This is a demonstration system. A production deployment would change the followi
   registry, no TLS or authentication between services, development credentials.
 - **Model governance.** Promotion is automatic when the quality gate passes; a real
   deployment would add shadow scoring, human sign-off and fairness checks on real data.
+
+## License
+
+Released under the [MIT License](LICENSE).

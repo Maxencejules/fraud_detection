@@ -25,7 +25,7 @@ ARG EXTRAS=stream
 WORKDIR /src
 
 # Dependencies first, so source edits do not invalidate this layer.
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock README.md LICENSE ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project $(for e in ${EXTRAS}; do printf -- '--extra %s ' "$e"; done)
 
