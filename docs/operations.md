@@ -82,6 +82,7 @@ history with `--reset`, which deletes the feature store keys first. Then retrain
 |---|---|---|
 | `/ready` returns 503 with `no model registered` | No champion yet: the trainer has not finished, or its model failed the quality gate. | `docker compose logs trainer`; look for `training_completed` and its `reason`. |
 | Trainer logs `champion_evaluation_failed`; the new version has tag `promotion=deferred` | The current champion could not be loaded or scored, so the new version was not compared and not promoted. | Check `mlflow` health and its artifact volume, then run `make train` again, or compare the versions and move the alias yourself. |
+| `/ready` shows `last_reload_error` | A newer champion failed to load, so the predictor still serves the version in `model_version` and retries on every poll. | Read the error, then check `mlflow` health or the model's feature contract. |
 | `/ready` returns 503 with a load error | The artifact store is unreachable, or the model's feature contract differs from the service. | Check the `mlflow` health and `docker compose logs predictor` (`model_load_failed`). |
 | Scorer logs `operation_retry` for `predictor` | The predictor is down or has no model. Events are held, not lost. | Fix the predictor; the scorer resumes automatically. |
 | Scorer logs HTTP 4xx and exits | Predictor and scorer disagree on the API contract (version skew). | Deploy both from the same version. |

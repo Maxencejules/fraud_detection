@@ -203,6 +203,27 @@ class TestAdminReload:
         response = client.post("/v1/admin/reload", headers={"Authorization": "Bearer nope"})
         assert response.status_code == 401
 
+    def test_rejects_non_ascii_token(self, client: TestClient) -> None:
+        response = client.post(
+            "/v1/admin/reload", headers={b"Authorization": "Bearer café".encode()}
+        )
+        assert response.status_code == 401
+
+    def test_reports_a_failed_reload(self, client: TestClient, registry: FakeRegistry) -> None:
+        registry.version, registry.fail_load = "2", True
+
+        response = client.post(
+            "/v1/admin/reload", headers={"Authorization": "Bearer s3cret-admin-token"}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["reloaded"] is False
+        assert response.json()["model_version"] == "1"
+        assert "artifact store unavailable" in response.json()["error"]
+        ready = client.get("/ready")
+        assert ready.status_code == 200  # still serving version 1
+        assert "artifact store unavailable" in ready.json()["last_reload_error"]
+
     def test_reloads_with_valid_token(self, client: TestClient, registry: FakeRegistry) -> None:
         registry.version = "2"
         response = client.post(

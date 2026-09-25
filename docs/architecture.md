@@ -183,7 +183,7 @@ idempotent and decisions are keyed by `transaction_id`. Producers use idempotenc
 | Subscribed topic missing | Logged and retried. librdkafka reports this as a consumer error; the original consumer exited on it. |
 | Fatal Kafka error | The process exits and Docker restarts it (`restart: unless-stopped`). |
 | `SIGTERM` (e.g. `docker compose stop`) | Loops finish the current batch, flush, commit and close cleanly. |
-| New model fails to load or breaks the contract | The predictor keeps serving the previous model and reports the error in `/ready` and metrics. |
+| New model fails to load or breaks the contract | The predictor keeps serving the previous model, retries on every poll, and reports the error in `/ready` (`last_reload_error`), the logs and metrics. |
 
 ## Monitoring
 

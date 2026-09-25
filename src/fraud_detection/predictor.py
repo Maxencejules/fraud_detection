@@ -244,7 +244,11 @@ def create_app(settings: PredictorSettings, manager: ModelManager | None = None)
                 status_code=503,
                 content={"status": "not_ready", "reason": model_manager.last_error},
             )
-        return JSONResponse(content={"status": "ready", "model_version": model.version})
+        content: dict[str, Any] = {"status": "ready", "model_version": model.version}
+        if model_manager.last_error is not None:
+            # Still serving the previous model: say why the registry's choice is not live.
+            content["last_reload_error"] = model_manager.last_error
+        return JSONResponse(content=content)
 
     @app.get("/metrics", tags=["operations"])
     async def metrics() -> Response:
@@ -307,14 +311,18 @@ def create_app(settings: PredictorSettings, manager: ModelManager | None = None)
         """Force a registry lookup and reload. Requires ``Authorization: Bearer <ADMIN_TOKEN>``."""
         if settings.admin_token is None:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Admin API disabled (ADMIN_TOKEN unset)")
-        expected = f"Bearer {settings.admin_token.get_secret_value()}"
-        if authorization is None or not secrets.compare_digest(authorization, expected):
+        expected = f"Bearer {settings.admin_token.get_secret_value()}".encode()
+        # Compare bytes: compare_digest rejects non-ASCII str, which would surface as a 500.
+        if authorization is None or not secrets.compare_digest(authorization.encode(), expected):
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid admin token")
         swapped = await model_manager.refresh(force=True)
         model = model_manager.current
         if model is None:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, model_manager.last_error)
-        return {"reloaded": swapped, "model_version": model.version}
+        result: dict[str, Any] = {"reloaded": swapped, "model_version": model.version}
+        if not swapped and model_manager.last_error is not None:
+            result["error"] = model_manager.last_error
+        return result
 
     return app
 
