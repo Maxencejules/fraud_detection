@@ -44,6 +44,9 @@ Without `make` (e.g. on Windows), run the commands behind each target in the
   panel or alert when the metric matters operationally.
 - **Results.** Quote only measured numbers, together with how and where they were
   measured (see `docs/results/`).
+- **Changelog.** Record user-visible changes in the topmost, unreleased section of
+  [`CHANGELOG.md`](CHANGELOG.md), and put anything that breaks existing users under
+  "Breaking changes".
 
 ## Commit messages
 
