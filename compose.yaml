@@ -89,7 +89,7 @@ services:
 
   postgres:
     <<: *logging
-    image: postgres:17-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: mlflow
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlflow}
