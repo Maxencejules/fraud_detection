@@ -1,8 +1,9 @@
-# Allow-list: the image needs only the project metadata, the lock file and the source.
+# Allow-list: the image needs only the project metadata, license, lock file and source.
 *
 !pyproject.toml
 !uv.lock
 !README.md
+!LICENSE
 !src/
 **/__pycache__/
 **/*.py[cod]
