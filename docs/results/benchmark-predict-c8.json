@@ -1,0 +1,39 @@
+{
+  "timestamp": "2026-09-25T07:44:23+00:00",
+  "target": "http://localhost:8000",
+  "endpoint": "/v1/predict",
+  "batch_size": 1,
+  "concurrency": 8,
+  "model_version": "1",
+  "requests": 3000,
+  "errors": 0,
+  "wall_seconds": 6.222,
+  "throughput_rps": 482.1,
+  "throughput_tps": 482.1,
+  "client_latency_ms": {
+    "p50": 15.746,
+    "p95": 22.852,
+    "p99": 35.842,
+    "max": 103.654,
+    "mean": 16.571
+  },
+  "server_latency_ms": {
+    "p50": 8.817,
+    "p95": 14.332,
+    "p99": 17.99,
+    "max": 96.181,
+    "mean": 8.815
+  },
+  "stream_end_to_end_ms": {
+    "window_s": 60.0,
+    "count": 1203.0,
+    "p50": 70.9,
+    "p95": 166.5,
+    "p99": 233.3
+  },
+  "environment": {
+    "cpus": 4,
+    "platform": "Linux-6.18.44-fc-v37-x86_64-with-glibc2.39",
+    "python": "3.12.11"
+  }
+}
