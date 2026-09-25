@@ -52,6 +52,7 @@ class RedisPipeline(Protocol):
     ) -> Any: ...
     def zcount(self, name: str, min: float | str, max: float | str) -> Any: ...
     def pfadd(self, name: str, *values: str) -> Any: ...
+    def delete(self, *names: str) -> Any: ...
     def pfcount(self, *sources: str) -> Any: ...
     def expire(self, name: str, time: int) -> Any: ...
     def execute(self) -> list[Any]: ...
@@ -68,6 +69,9 @@ class FeatureStoreConfig:
     merchant_window_days: int = 30
     merchant_prior_rate: float = 0.01
     merchant_prior_weight: float = 50.0
+    # Extra event-time days merchant counters are kept beyond what any feature reads, so
+    # out-of-order events and lagging processor replicas still find them.
+    merchant_retention_slack_days: int = 30
 
     @property
     def user_retention_seconds(self) -> int:
@@ -78,6 +82,16 @@ class FeatureStoreConfig:
     def merchant_ttl_seconds(self) -> int:
         """Garbage-collection TTL for per-day merchant counters (wall-clock seconds)."""
         return (self.merchant_window_days + 2) * DAY + self.label_delay_seconds
+
+    @property
+    def merchant_retention_days(self) -> int:
+        """Event-time age in days after which per-day merchant counters are deleted.
+
+        The wall-clock TTL alone is not enough: simulated time can run hundreds of times
+        faster than real time, which would leave thousands of daily keys per merchant.
+        """
+        delay_days = math.ceil(self.label_delay_seconds / DAY)
+        return self.merchant_window_days + delay_days + 1 + self.merchant_retention_slack_days
 
     def user_key(self, user_id: str, kind: str) -> str:
         return f"{self.key_prefix}:u:{{{user_id}}}:{kind}"
@@ -211,12 +225,16 @@ class FeatureEngineer:
     """Maintains per-user/per-merchant state in Redis and emits feature events."""
 
     MERCHANT_CACHE_SIZE: Final = 200_000
+    # Stale merchant days deleted per sweep; covers days on which a merchant was inactive.
+    MERCHANT_SWEEP_DAYS: Final = 7
 
     def __init__(self, redis_client: RedisClient, config: FeatureStoreConfig | None = None):
         self._redis = redis_client
         self.config = config or FeatureStoreConfig()
         # (merchant_id, last known day) -> (transactions, frauds) over the window.
         self._merchant_counts: dict[tuple[str, int], tuple[int, int]] = {}
+        # merchant_id -> event-time day of the last stale-counter sweep.
+        self._merchant_swept: dict[str, int] = {}
 
     def compute(self, tx: RawTransaction) -> FeatureEvent:
         return self.compute_batch([tx])[0]
@@ -227,6 +245,8 @@ class FeatureEngineer:
             return []
         if len(self._merchant_counts) > self.MERCHANT_CACHE_SIZE:
             self._merchant_counts.clear()
+        if len(self._merchant_swept) > self.MERCHANT_CACHE_SIZE:
+            self._merchant_swept.clear()
         pipe = self._redis.pipeline(transaction=False)
         counter = _Counter()
         plans = [self._queue(pipe, tx, counter) for tx in txs]
@@ -293,6 +313,19 @@ class FeatureEngineer:
             merchant_fraud_key = cfg.merchant_key(tx.merchant_id, "fraud", today)
             counter.add(pipe.pfadd(merchant_fraud_key, tx.transaction_id))
             counter.add(pipe.expire(merchant_fraud_key, cfg.merchant_ttl_seconds))
+        if self._merchant_swept.get(tx.merchant_id) != today:
+            self._merchant_swept[tx.merchant_id] = today
+            newest_stale = today - cfg.merchant_retention_days
+            stale_days = range(newest_stale - self.MERCHANT_SWEEP_DAYS + 1, newest_stale + 1)
+            counter.add(
+                pipe.delete(
+                    *[
+                        cfg.merchant_key(tx.merchant_id, kind, day)
+                        for kind in ("tx", "fraud")
+                        for day in stale_days
+                    ]
+                )
+            )
         days = merchant_window_days(ts, cfg)
         merchant_key = (tx.merchant_id, days[-1])
         if merchant_key in self._merchant_counts:

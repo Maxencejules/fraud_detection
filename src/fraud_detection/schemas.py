@@ -14,7 +14,14 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 Identifier = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_.:-]{1,64}$")]
 CountryCode = Annotated[str, StringConstraints(pattern=r"^[A-Z]{2}$")]
 CurrencyCode = Annotated[str, StringConstraints(pattern=r"^[A-Z]{3}$")]
-UnixSeconds = Annotated[float, Field(gt=0.0, description="Seconds since the Unix epoch (UTC).")]
+# The upper bound is the end of year 9999, where datetime's range ends. Larger values are
+# almost always milliseconds or microseconds; rejecting them at validation keeps a unit
+# mistake from reaching the feature store, where it would trim the user's entire history.
+MAX_UNIX_SECONDS = 253_402_300_800.0
+UnixSeconds = Annotated[
+    float,
+    Field(gt=0.0, lt=MAX_UNIX_SECONDS, description="Seconds since the Unix epoch (UTC)."),
+]
 
 
 class Decision(StrEnum):

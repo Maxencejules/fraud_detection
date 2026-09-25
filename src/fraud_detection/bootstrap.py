@@ -149,7 +149,10 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--skip-if-present",
         action="store_true",
-        help="exit successfully if the store is already bootstrapped and the dataset exists",
+        help=(
+            "exit successfully if the store is already bootstrapped and the dataset exists; "
+            "otherwise reset the store before replaying"
+        ),
     )
     parser.add_argument(
         "--end",
@@ -166,11 +169,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     configure_logging("bootstrap", settings.log_level)
     client = _connect(settings, args.offline)
 
+    reset = args.reset or args.offline
     if args.skip_if_present and not args.offline:
         clock_key = settings.feature_store_config().clock_key()
         if client.exists(clock_key) and settings.output_path.exists():
             logger.info("bootstrap_skipped", extra={"reason": "already bootstrapped"})
             return
+        # The clock key is written last, so without it (or without the dataset) the store
+        # holds an interrupted or unrelated run; replaying over it would corrupt features.
+        reset = True
 
     end = next(
         (value for value in (args.end, settings.history_end) if value is not None),
@@ -180,7 +187,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         "bootstrap_started",
         extra={"history_days": settings.history_days, "end": end, "offline": args.offline},
     )
-    summary = run_bootstrap(settings, client, end=end, reset=args.reset or args.offline)
+    summary = run_bootstrap(settings, client, end=end, reset=reset)
     logger.info(
         "bootstrap_completed",
         extra={

@@ -80,6 +80,26 @@ def test_invalid_messages_go_to_the_dead_letter_topic(
     assert [tp.offset for tp in consumer.stored] == [4]
 
 
+def test_timestamps_in_the_wrong_unit_never_reach_the_feature_store(
+    kafka: Any, shutdown: GracefulShutdown, make_tx: Any
+) -> None:
+    client = fakeredis.FakeRedis()
+    engineer = FeatureEngineer(client)
+    history = make_tx(user_id="u1")
+    engineer.compute_batch([history])
+    in_milliseconds = make_tx(user_id="u1").model_dump(mode="json")
+    in_milliseconds["timestamp"] = (history.timestamp + 60) * 1000
+    batch = [kafka.Message(json.dumps(in_milliseconds).encode(), offset=0)]
+    processor, consumer, producer = _processor(kafka, shutdown, [batch], engineer=engineer)
+
+    processor.process_batch(batch)
+
+    letters = [json.loads(v) for v in producer.values(SETTINGS.topic_dlq)]
+    assert [letter["stage"] for letter in letters] == ["validate"]
+    assert client.zcard(engineer.config.user_key("u1", "tx")) == 1  # history untouched
+    assert [tp.offset for tp in consumer.stored] == [1]
+
+
 def test_offsets_are_not_committed_when_delivery_fails(
     kafka: Any, shutdown: GracefulShutdown, make_tx: Any
 ) -> None:

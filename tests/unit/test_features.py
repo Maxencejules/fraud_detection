@@ -235,6 +235,25 @@ def test_merchant_window_excludes_days_without_known_labels() -> None:
     assert days[-1] == utc_day(T0 - CONFIG.label_delay_seconds) - 1
 
 
+def test_merchant_counters_outside_event_time_retention_are_deleted(
+    engineer: FeatureEngineer, redis_client: fakeredis.FakeRedis, make_tx: Any
+) -> None:
+    first_day = utc_day(T0)
+    for offset in range(80):  # one purchase a day at the same merchant
+        engineer.compute(
+            make_tx(transaction_id=f"t{offset}", merchant_id="m1", timestamp=T0 + offset * DAY)
+        )
+
+    kept = [
+        offset
+        for offset in range(80)
+        if redis_client.exists(CONFIG.merchant_key("m1", "tx", first_day + offset))
+    ]
+    assert kept == list(range(80 - CONFIG.merchant_retention_days, 80))
+    readable = merchant_window_days(T0 + 79 * DAY, CONFIG)  # what features can still read
+    assert {day - first_day for day in readable} <= set(kept)
+
+
 def test_raw_transaction_rejects_malformed_identifiers() -> None:
     with pytest.raises(ValueError, match="transaction_id"):
         RawTransaction(
