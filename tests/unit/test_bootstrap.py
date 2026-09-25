@@ -81,3 +81,34 @@ def test_cli_offline_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     main(["--offline", "--end", str(END)])
 
     assert len(pd.read_parquet(output)) > 0
+
+
+def test_interrupted_bootstrap_is_redone_from_a_clean_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "features.parquet"
+    for name, value in {
+        "OUTPUT_PATH": str(output),
+        "HISTORY_DAYS": "2",
+        "SIM_USERS": "50",
+        "SIM_MERCHANTS": "20",
+    }.items():
+        monkeypatch.setenv(name, value)
+    settings = BootstrapSettings()
+    store = fakeredis.FakeRedis()
+    # An earlier run with another end time died before writing its completion marker.
+    run_bootstrap(settings, store, end=END - DAY / 2)
+    store.delete(settings.feature_store_config().clock_key())
+    output.unlink()
+    monkeypatch.setattr("fraud_detection.bootstrap._connect", lambda *_: store)
+
+    main(["--skip-if-present", "--end", str(END)])
+
+    run_bootstrap(
+        settings.model_copy(update={"output_path": tmp_path / "clean.parquet"}),
+        fakeredis.FakeRedis(),
+        end=END,
+    )
+    pd.testing.assert_frame_equal(
+        pd.read_parquet(output), pd.read_parquet(tmp_path / "clean.parquet")
+    )

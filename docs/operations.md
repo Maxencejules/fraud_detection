@@ -96,7 +96,7 @@ history with `--reset`, which deletes the feature store keys first. Then retrain
 | Data | Location | Retention |
 |---|---|---|
 | Kafka topics | `kafka` container | Broker defaults (7 days); not persisted across container re-creation. |
-| Online features | `redis_data` volume (AOF) | Per-user state trimmed to 32 days of event time; keys expire via TTL. |
+| Online features | `redis_data` volume (AOF) | Per-user state trimmed to 32 days of event time; per-merchant daily counters deleted after 63 days of event time; all keys also expire via TTL. |
 | MLflow runs and models | `postgres_data`, `mlflow_artifacts` volumes | Until deleted. |
 | Drift reports (HTML) | `reports` volume | Newest 20 kept. |
 | Training dataset | `training_data` volume | Overwritten by each bootstrap. |

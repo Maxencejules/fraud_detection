@@ -81,7 +81,9 @@ checks that features computed against the real Redis match the in-memory emulati
 - **Daily merchant risk.** Merchant fraud rates use complete days whose labels are
   known, so they are final once computed and cached per merchant and day, the way
   production systems serve daily batch risk scores. Per-day counters are
-  HyperLogLogs of transaction ids, which keeps them idempotent too.
+  HyperLogLogs of transaction ids, which keeps them idempotent too. Counters are deleted
+  63 days of event time after their day (30 days more than any feature reads), because
+  simulated time runs far faster than their wall-clock TTL.
 - **Cluster-ready keys.** Keys carry `{hash tags}` (`fd:u:{u000042}:tx`) so multi-key
   commands stay in one slot on Redis Cluster.
 
