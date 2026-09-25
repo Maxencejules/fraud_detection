@@ -1,0 +1,300 @@
+# Real-time fraud detection stack.
+#
+#   docker compose up -d --build                         # full pipeline
+#   docker compose --profile observability up -d         # + Prometheus and Grafana
+#   docker compose --profile tools up -d kafka-ui        # + Kafka UI
+#
+# One-shot jobs run in order on `up`: `bootstrap` simulates history and warms Redis,
+# `trainer` registers the first champion. Both are skipped when already done; use
+# `make bootstrap` / `make train` to force them. Host ports bind to 127.0.0.1 only.
+# Copy .env.example to .env to override any ${VARIABLE}.
+
+name: fraud-detection
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+x-app-env: &app-env
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+  REDIS_URL: redis://redis:6379/0
+  MLFLOW_TRACKING_URI: http://mlflow:5000
+  SIM_SEED: ${SIM_SEED:-42}
+  SIM_USERS: ${SIM_USERS:-3000}
+  SIM_MERCHANTS: ${SIM_MERCHANTS:-600}
+  THRESHOLD_REVIEW: ${THRESHOLD_REVIEW:-0.1}
+  THRESHOLD_BLOCK: ${THRESHOLD_BLOCK:-0.9}
+
+x-stream: &stream
+  <<: *logging
+  image: fraud-detection/stream:${IMAGE_TAG:-local}
+  build:
+    context: .
+    args: { EXTRAS: stream }
+  restart: unless-stopped
+
+x-training: &training
+  <<: *logging
+  image: fraud-detection/training:${IMAGE_TAG:-local}
+  build:
+    context: .
+    args: { EXTRAS: training, NEEDS_OPENMP: "true" }
+  volumes:
+    - training_data:/app/data
+
+services:
+  # --- infrastructure -----------------------------------------------------------------
+  kafka:
+    <<: *logging
+    image: apache/kafka:4.1.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Topics are created explicitly (partitions, DLQ) by the services.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    ports: ["127.0.0.1:9092:9092"]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 15s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  redis:
+    <<: *logging
+    image: redis:8.2-alpine
+    # Online feature store: persist it, and never silently evict feature state.
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    volumes: [redis_data:/data]
+    ports: ["127.0.0.1:6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  postgres:
+    <<: *logging
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mlflow}
+      POSTGRES_DB: mlflow
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow -d mlflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  mlflow:
+    <<: *logging
+    image: fraud-detection/mlflow:${IMAGE_TAG:-local}
+    build: infra/mlflow
+    command:
+      - mlflow
+      - server
+      - --host=0.0.0.0
+      - --port=5000
+      - --workers=1
+      - --backend-store-uri=postgresql://mlflow:${POSTGRES_PASSWORD:-mlflow}@postgres:5432/mlflow
+      # Proxied artifacts: clients upload/download through the server instead of
+      # writing to a path that only exists inside their own container.
+      - --serve-artifacts
+      - --artifacts-destination=/mlflow/artifacts
+      # MLflow 3 rejects unknown Host headers (DNS-rebinding protection).
+      - --allowed-hosts=mlflow,mlflow:5000,localhost,localhost:*,127.0.0.1,127.0.0.1:*
+    environment:
+      MLFLOW_DISABLE_TELEMETRY: "true"
+    volumes: [mlflow_artifacts:/mlflow/artifacts]
+    ports: ["127.0.0.1:5001:5000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # --- one-shot jobs --------------------------------------------------------------------
+  bootstrap:
+    <<: *training
+    command: ["python", "-m", "fraud_detection.bootstrap", "--skip-if-present"]
+    environment:
+      <<: *app-env
+      OUTPUT_PATH: /app/data/features.parquet
+      HISTORY_DAYS: ${HISTORY_DAYS:-45}
+      HISTORY_END: ${HISTORY_END:-}
+    depends_on:
+      redis: { condition: service_healthy }
+    restart: "no"
+
+  trainer:
+    <<: *training
+    command: ["python", "-m", "fraud_detection.trainer", "--skip-if-champion"]
+    environment:
+      <<: *app-env
+      DATA_PATH: /app/data/features.parquet
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
+      mlflow: { condition: service_healthy }
+    restart: "no"
+
+  # --- online services ------------------------------------------------------------------
+  predictor:
+    <<: *logging
+    image: fraud-detection/serving:${IMAGE_TAG:-local}
+    build:
+      context: .
+      args: { EXTRAS: serving, NEEDS_OPENMP: "true" }
+    command: ["python", "-m", "fraud_detection.predictor"]
+    environment:
+      <<: *app-env
+      MODEL_POLL_INTERVAL_S: ${MODEL_POLL_INTERVAL_S:-15}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      mlflow: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+
+  feature-processor:
+    <<: *stream
+    command: ["python", "-m", "fraud_detection.feature_processor"]
+    environment:
+      <<: *app-env
+      METRICS_PORT: 9108
+    ports: ["127.0.0.1:9108:9108"]
+    depends_on:
+      kafka: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      bootstrap: { condition: service_completed_successfully }
+    healthcheck: &metrics-healthcheck
+      test: ["CMD-SHELL", "python -c \"import os, urllib.request; urllib.request.urlopen('http://localhost:%s/metrics' % os.environ['METRICS_PORT'], timeout=3)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 4
+      start_period: 20s
+
+  scorer:
+    <<: *stream
+    command: ["python", "-m", "fraud_detection.scorer"]
+    environment:
+      <<: *app-env
+      PREDICTOR_URL: http://predictor:8000
+      METRICS_PORT: 9110
+    ports: ["127.0.0.1:9110:9110"]
+    depends_on:
+      kafka: { condition: service_healthy }
+      predictor: { condition: service_healthy }
+    healthcheck: *metrics-healthcheck
+
+  producer:
+    <<: *stream
+    command: ["python", "-m", "fraud_detection.producer"]
+    environment:
+      <<: *app-env
+      EMIT_RATE_TPS: ${EMIT_RATE_TPS:-20}
+      METRICS_PORT: 9107
+    ports: ["127.0.0.1:9107:9107"]
+    depends_on:
+      kafka: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      # Start traffic once a model exists, so latency metrics are not skewed by a backlog.
+      trainer: { condition: service_completed_successfully }
+    healthcheck: *metrics-healthcheck
+
+  monitor:
+    <<: *logging
+    image: fraud-detection/monitoring:${IMAGE_TAG:-local}
+    build:
+      context: .
+      args: { EXTRAS: monitoring }
+    command: ["python", "-m", "fraud_detection.monitor"]
+    environment:
+      <<: *app-env
+      METRICS_PORT: 9109
+      REPORTS_DIR: /app/reports
+      REPORT_INTERVAL_S: ${MONITOR_REPORT_INTERVAL_S:-300}
+      MIN_ROWS: ${MONITOR_MIN_ROWS:-200}
+      WINDOW_SIZE: ${MONITOR_WINDOW_SIZE:-2000}
+    volumes: [reports:/app/reports]
+    ports: ["127.0.0.1:9109:9109"]
+    depends_on:
+      kafka: { condition: service_healthy }
+      mlflow: { condition: service_healthy }
+    healthcheck: *metrics-healthcheck
+    restart: unless-stopped
+
+  # --- optional: observability (--profile observability) --------------------------------
+  prometheus:
+    <<: *logging
+    image: prom/prometheus:v3.14.0
+    profiles: [observability]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+    restart: unless-stopped
+
+  grafana:
+    <<: *logging
+    image: grafana/grafana:13.2.2
+    profiles: [observability]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/fraud-pipeline.json
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on: [prometheus]
+    restart: unless-stopped
+
+  # --- optional: Kafka UI (--profile tools) -----------------------------------------------
+  kafka-ui:
+    <<: *logging
+    image: kafbat/kafka-ui:v1.5.0
+    profiles: [tools]
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on:
+      kafka: { condition: service_healthy }
+
+volumes:
+  redis_data:
+  postgres_data:
+  mlflow_artifacts:
+  training_data:
+  reports:
+  prometheus_data:
