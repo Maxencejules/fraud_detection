@@ -1,0 +1,24 @@
+global:
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  - job_name: predictor
+    static_configs:
+      - targets: ["predictor:8000"]
+
+  - job_name: producer
+    static_configs:
+      - targets: ["producer:9107"]
+
+  - job_name: feature-processor
+    static_configs:
+      - targets: ["feature-processor:9108"]
+
+  - job_name: monitor
+    static_configs:
+      - targets: ["monitor:9109"]
+
+  - job_name: scorer
+    static_configs:
+      - targets: ["scorer:9110"]

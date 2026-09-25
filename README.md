@@ -1,132 +1,187 @@
-# Real-Time Fraud Detection Pipeline
+# Real-time fraud detection
 
-Production-style fraud detection demo that combines streaming feature engineering with synchronous model serving.
+[![CI](https://github.com/Maxencejules/fraud_detection/actions/workflows/ci.yml/badge.svg)](https://github.com/Maxencejules/fraud_detection/actions/workflows/ci.yml)
 
-Raw card transactions flow through Kafka, user and merchant behavior is aggregated in Redis, a FastAPI predictor serves fraud decisions from an MLflow-registered model, and an Evidently-based monitor publishes drift reports to MLflow artifacts.
+A streaming fraud-detection system that scores card transactions as they happen. It
+covers the whole path: simulated traffic, feature computation, scoring, model
+training and rollout, and monitoring for drift. Everything runs locally with one
+Docker Compose command.
 
-## Verified Run
-
-Artifacts were generated locally on April 25, 2026.
-
-- Training quality from `output/runtime/artifact_summary.json`: `xgb PR-AUC 1.0000`, `lightgbm PR-AUC 0.9998`, `ensemble PR-AUC 0.99998`.
-- Predictor-reported serving latency from `output/runtime/benchmark_latest.json`: `mean 10.92 ms`, `p50 9.29 ms`, `p95 19.66 ms`.
-- End-to-end client timing in the same local fallback run: `p50 4110.92 ms`, `p95 4133.96 ms`, `p99 4135.80 ms`, `0/60` errors at concurrency `5`.
-- Evidently drift report generated at `reports/local_drift_report_1777095421.html` with `drift_share 0.30`.
-- Supporting screenshots were captured to `output/screenshots/mlflow_training.png`, `output/screenshots/mlflow_monitoring.png`, and `output/screenshots/evidently_report.png`.
-
-The benchmark caveat matters: the low double-digit millisecond numbers reflect predictor-side inference latency, while the multi-second client timings came from a local non-Docker fallback path after Docker Desktop failed on this machine with a WSL backend error. If you rerun the Compose flow on a healthy Docker host, publish those end-to-end numbers instead.
-
-## System Capabilities
-
-- Kafka-based transaction ingestion with Redis-backed online feature state.
-- FastAPI fraud scoring service with MLflow-managed model loading and reload support.
-- Drift and data-quality monitoring with Evidently, plus Prometheus metrics and health endpoints.
-- Docker Compose, smoke testing, benchmarking, and GitHub Actions coverage for reproducible validation.
+- **Streaming features** in Kafka with exact event-time windows kept in Redis. The same
+  code builds the training set, so training and serving cannot disagree.
+- **A calibrated XGBoost + LightGBM model**, evaluated on a later time period than it
+  was trained on, and promoted through an MLflow champion/challenger gate.
+- **A FastAPI scoring service** that picks up newly promoted models without a restart.
+- **A stream scorer** that publishes a decision (`APPROVE`, `REVIEW`, `BLOCK`) for every
+  transaction.
+- **Monitoring:** Evidently drift and live-quality reports, Prometheus metrics and a
+  Grafana dashboard.
 
 ## Architecture
 
-`producer` -> publishes synthetic raw transactions to `transactions.raw`
+```mermaid
+flowchart LR
+    P[producer] -->|transactions.raw| F[feature-processor]
+    F <-->|rolling windows| R[(Redis)]
+    F -->|transactions.features| S[scorer]
+    S -->|batch scoring| API[predictor]
+    S -->|transactions.decisions| M[monitor]
+    API -->|champion alias| ML[(MLflow)]
+    M -->|drift reports| ML
+    T[trainer] -->|register + promote| ML
+    B[bootstrap] -->|history| R
+    B -->|training set| T
+```
 
-`consumer` -> computes rolling fraud features, emits feature events to `transactions.features`, and routes malformed events to `transactions.raw.dlq`
+On start-up, `bootstrap` simulates 45 days of history through the production feature
+code, which warms Redis and writes the training set. `trainer` then registers the first
+champion model, and live traffic starts. The [architecture document](docs/architecture.md)
+describes the design and the reasoning behind it.
 
-`predictor` -> serves `/predict`, `/health`, `/ready`, and `/metrics` using the champion model from MLflow
+## Quickstart
 
-`monitor` -> consumes engineered features, joins cached predictions when present, and logs Evidently drift reports to MLflow
+Requirements: Docker with Compose v2, 4 CPU cores and about 6 GB of memory for Docker
+(the running stack uses about 4 GB; training briefly needs more).
 
-`trainer` -> trains XGBoost and LightGBM candidates, logs evaluation metrics, and promotes the best registry version
+```bash
+docker compose up -d --build              # builds images, bootstraps, trains, starts
+python3 scripts/smoke_test.py             # verifies the pipeline end to end
+```
 
-## Production-Minded Details
+The first start takes about a minute after the images are built. Then open:
 
-- Rolling features include transaction velocity, spend accumulation, merchant diversity, country spread, merchant fraud rate, and user chargeback rate.
-- The consumer now emits dead-letter events with source topic, partition, offset, and original payload context.
-- The predictor exposes Prometheus metrics and a readiness gate, which makes CI and deployment checks much cleaner.
-- The monitor publishes drift reports as HTML artifacts and surfaces its own runtime counters for report generation and cache misses.
-- CI validates both isolated logic and a real Docker stack that trains a model, reloads it, starts traffic, and waits for a drift report.
+| What | Where |
+|---|---|
+| Scoring API (OpenAPI docs) | http://localhost:8000/docs |
+| MLflow: runs, model registry, drift reports | http://localhost:5001 |
+| Grafana dashboard (start with `--profile observability`) | http://localhost:3000 |
+| Kafka UI (start with `--profile tools`) | http://localhost:8080 |
 
-## Project Layout
+Score a transaction directly:
+
+```bash
+curl -s localhost:8000/v1/predict -H 'Content-Type: application/json' -d '{
+  "transaction_id": "demo-1", "amount": 1899.0, "amount_log": 7.55, "amount_zscore": 12.4,
+  "tx_count_1h": 4, "tx_count_24h": 5, "tx_sum_1h": 2410.0, "tx_sum_24h": 2455.0,
+  "unique_merchants_24h": 4, "unique_countries_7d": 2, "seconds_since_last_tx": 95,
+  "is_new_country": true, "hour_of_day": 3, "day_of_week": 6, "is_weekend": true,
+  "card_present": false, "merchant_fraud_rate_30d": 0.09, "user_chargeback_rate": 0.0}'
+```
+
+The response contains `fraud_probability`, `decision`, `model_version` and `latency_ms`.
+`POST /v1/predict/batch` scores up to 1,000 transactions per request.
+
+## Results
+
+Measured from a clean `docker compose up` with `HISTORY_END=1767225600`, which pins
+the simulated history, so the dataset and model are reproducible. The model was
+evaluated on the final six days of that history, 24,059 transactions of which 0.97% are
+fraud; the model never saw that period during training. Full details are in the
+[model card](docs/model-card.md).
+
+| Model quality (test period) | |
+|---|---|
+| PR-AUC | **0.79** (95% CI 0.71–0.85) |
+| ROC-AUC | 0.987 |
+| Recall at a 1% false-positive rate | 0.85 |
+| `REVIEW` or `BLOCK` (p ≥ 0.1) | precision 0.49, recall 0.80, 1.6% of traffic flagged |
+| `BLOCK` (p ≥ 0.9) | precision 0.96, recall 0.47 |
+
+| Latency and throughput | p50 | p95 | p99 |
+|---|---|---|---|
+| `/v1/predict`, one request at a time (server time) | 0.9 ms | 1.5 ms | 2.4 ms |
+| `/v1/predict`, 8 concurrent clients (client time), 459 req/s | 16.2 ms | 23.7 ms | 35.3 ms |
+| Producer → published decision, 20 transactions/s | 71 ms | 148 ms | 230 ms |
+
+Batch scoring (`/v1/predict/batch`, 50 per request) sustained about 15,000
+transactions/s. All figures come from a 4-vCPU virtual machine that also ran the entire stack
+and the load generator, so treat them as an order of magnitude, not a capacity plan.
+The raw results are in [`docs/results/`](docs/results/); reproduce them with
+`make benchmark`.
+
+For context, the previous version of this project reported a PR-AUC of 1.0. That
+number came from synthetic data in which fraud and legitimate transactions were
+perfectly separable (every fraud row had two or more countries and every legitimate
+row exactly one), not from a model that works. The current simulator makes the
+classes overlap, and evaluation uses a later time period than training.
+
+## Screenshots
+
+| Grafana: pipeline health | MLflow: model registry |
+|---|---|
+| ![Grafana dashboard](docs/images/grafana-dashboard.png) | ![MLflow registry](docs/images/mlflow-registry.png) |
+
+![Evidently drift report](docs/images/evidently-report.png)
+
+## Configuration
+
+Every setting is an environment variable with a safe default; copy
+[`.env.example`](.env.example) to `.env` to override them. The most useful ones:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `EMIT_RATE_TPS` | `20` | Simulated transactions per second. |
+| `THRESHOLD_REVIEW`, `THRESHOLD_BLOCK` | `0.1`, `0.9` | Decision policy on the calibrated probability. |
+| `HISTORY_DAYS`, `HISTORY_END` | `45`, now | Simulated history used for training and the Redis backfill. |
+| `MODEL_POLL_INTERVAL_S` | `15` | How quickly the predictor adopts a new champion. |
+| `ADMIN_TOKEN` | unset | Enables `POST /v1/admin/reload` (at least 16 characters). |
+| `MONITOR_REPORT_INTERVAL_S` | `300` | Drift report frequency. |
+
+Operational tasks (retraining, rollback, alerts, troubleshooting) are covered in the
+[operations runbook](docs/operations.md).
+
+## Development
+
+The project is one installable package (`src/fraud_detection`) with one optional
+dependency group per service, locked with [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync --all-extras      # Python 3.12+, all dependencies
+make check                # ruff, mypy --strict, unit tests (85% coverage gate)
+make up smoke             # full stack and end-to-end check
+make test-integration     # tests against the running stack
+```
+
+| Test layer | What it covers |
+|---|---|
+| Unit | Features, simulator, model, trainer, predictor API, every stream processor with Kafka test doubles. |
+| Dependency boundaries | Each service imports with only its own dependency group installed. |
+| Integration | Real Redis matches the offline feature store; a transaction flows from `transactions.raw` to a decision; malformed messages reach the DLQ; the champion loads from the registry. |
+| End to end (CI) | Builds every image, runs the full stack, the smoke and integration tests and a benchmark. |
+
+CI also enforces formatting, strict typing, a dependency vulnerability audit and
+Python 3.12/3.13 compatibility. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```text
-services/
-  producer/   synthetic transaction generator
-  consumer/   streaming feature engineering + DLQ handling
-  predictor/  FastAPI fraud scoring API + Prometheus metrics
-  trainer/    offline training + MLflow model registration
-  monitor/    Evidently drift and data-quality reporting
-scripts/
-  gen_training_data.py
-  benchmark_latency.py
-  smoke_test_stack.py
-tests/
-  test_feature_engineer.py
-  test_predictor.py
+src/fraud_detection/
+  simulation.py         synthetic users, merchants and fraud patterns
+  features.py           event-time feature engineering over Redis
+  bootstrap.py          history replay: training set and Redis backfill
+  trainer.py            training, evaluation, registration, promotion
+  modeling.py           calibrated ensemble packaged as an MLflow model
+  predictor.py          FastAPI scoring service with hot model reload
+  producer.py | feature_processor.py | scorer.py | monitor.py   stream services
+infra/                  MLflow image, Prometheus and Grafana provisioning
+scripts/                smoke test and benchmark
+tests/                  unit and integration tests
+docs/                   architecture, model card, operations, results
 ```
 
-## Demo Flow
+## Limitations
 
-1. Install local helper dependencies for tests and scripts:
+This is a demonstration system. A production deployment would change the following:
 
-```powershell
-python -m pip install -r requirements-dev.txt
-```
+- **Data.** Transactions are simulated, so the model's quality says nothing about real
+  fraud. Labels travel with the events; a real system receives chargebacks later through
+  a separate feed.
+- **Simulated time runs fast.** To produce enough traffic from a small population, a
+  simulated day passes in minutes at the default rate. Features use event time, so
+  results stay consistent, but event timestamps run ahead of the clock.
+- **Infrastructure.** Single Kafka broker and Redis node, JSON without a schema
+  registry, no TLS or authentication between services, development credentials.
+- **Model governance.** Promotion is automatic when the quality gate passes; a real
+  deployment would add shadow scoring, human sign-off and fairness checks on real data.
 
-2. Generate training and reference data:
+## License
 
-```powershell
-python scripts/gen_training_data.py
-```
-
-3. Start infrastructure and long-running services:
-
-```powershell
-docker compose up --build zookeeper kafka redis postgres mlflow consumer predictor monitor
-```
-
-4. Train and register the first production model:
-
-```powershell
-docker compose --profile train run --rm trainer
-```
-
-5. Reload the predictor so it serves the newly promoted model:
-
-```powershell
-Invoke-RestMethod -Method Post http://localhost:8000/reload-model
-```
-
-6. Start live traffic:
-
-```powershell
-docker compose up producer
-```
-
-7. Run the smoke test:
-
-```powershell
-python scripts/smoke_test_stack.py --base-url http://localhost:8000 --reports-dir reports --timeout 180
-```
-
-8. Capture a benchmark artifact for your README, resume, or LinkedIn post:
-
-```powershell
-python scripts/benchmark_latency.py --url http://localhost:8000 --n 500 --concurrency 20 --json-out reports/benchmark_latest.json
-```
-
-## Local Test Run
-
-```powershell
-python -m pytest -q
-```
-
-The unit tests are intentionally fast. They validate feature engineering behavior, DLQ payload construction, inference decisions, readiness behavior, and the predictor metrics endpoint without requiring Kafka, Redis, or MLflow to be running.
-
-## Useful Endpoints
-
-- `GET /health` returns process health and model load state
-- `GET /ready` returns `200` only when a serving model is loaded
-- `GET /metrics` exposes Prometheus counters and latency histograms
-- `POST /predict` scores one engineered transaction payload
-- `POST /reload-model` refreshes the serving model from MLflow
-
-## Current Boundary
-
-This repo streams real-time feature generation and exposes fraud scoring through a low-latency API. The next obvious extension is a dedicated scoring consumer that reads `transactions.features` and emits a `transactions.decisions` topic for fully automated stream-to-decision processing.
+Released under the [MIT License](LICENSE).
