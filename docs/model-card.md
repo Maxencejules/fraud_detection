@@ -12,7 +12,7 @@ the same dataset and the same model; the trainer logs every figure below to MLfl
 | Type | Binary classifier: average of an XGBoost and a LightGBM gradient-boosted tree model, followed by Platt (logit) calibration. |
 | Output | Calibrated probability that a card transaction is fraudulent. |
 | Inputs | The 17 behavioural features defined in the [architecture document](architecture.md#feature-engineering). |
-| Serving | MLflow pyfunc (models from code), loaded by the predictor through the `champion` registry alias. |
+| Serving | Registered in MLflow as native model files plus a pyfunc wrapper (models from code). The predictor loads the native files through the `champion` registry alias. |
 | Decision policy | `REVIEW` when p ≥ 0.1, `BLOCK` when p ≥ 0.9, otherwise `APPROVE` (`THRESHOLD_REVIEW`, `THRESHOLD_BLOCK`). |
 | Training code | [`trainer.py`](../src/fraud_detection/trainer.py) |
 

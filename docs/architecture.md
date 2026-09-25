@@ -149,9 +149,12 @@ sequenceDiagram
   evaluated and rejected: it collapsed ~24k distinct test scores into 29 plateaus,
   cost 0.021 PR-AUC and worsened log loss.
 - **Packaging.** Artifacts are stored in native formats (XGBoost JSON, LightGBM text,
-  calibration JSON) and logged with MLflow *models from code*, so loading a model
-  never unpickles arbitrary objects. The logged signature and `model_config` carry the
-  feature contract; the predictor refuses a model whose features differ from its own.
+  calibration JSON), wrapped in an MLflow pyfunc logged with *models from code* so that
+  standard MLflow tooling can serve it. The services never use that wrapper: they read
+  the native files and the feature contract from `MLmodel` and build the scorer with
+  the installed package's code. Loading a model therefore never executes code or
+  unpickles objects from the registry. The predictor refuses a model whose features
+  differ from its own.
 - **Champion/challenger.** A new version only takes the `champion` alias if its test
   PR-AUC clears `MIN_PR_AUC` and is at least the champion's PR-AUC *on the same test
   period*. Rejected versions get the `challenger` alias. If the champion exists but
@@ -215,6 +218,9 @@ idempotent and decisions are keyed by `transaction_id`. Producers use idempotenc
   Internal errors return an opaque message with a request id.
 - MLflow's host-header protection stays enabled with an explicit allow-list, and its
   usage telemetry is turned off.
+- Models are loaded as data (native model files and YAML) with code from the installed
+  package, so write access to the registry cannot run code in the services. It does
+  still decide which model serves traffic, and the demo's MLflow has no authentication.
 - CI pins third-party actions to commit SHAs, runs with read-only permissions and
   audits dependencies for known vulnerabilities.
 
