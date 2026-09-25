@@ -3,7 +3,8 @@
 Artifacts are stored in the libraries' native formats (XGBoost JSON, LightGBM text,
 calibration parameters as JSON) rather than pickles, so they load across library versions
 and never execute code on load. ``FraudModel`` is logged with MLflow's
-"models from code" mechanism (see ``model_code.py``) for the same reason.
+"models from code" mechanism (see ``model_code.py``) so standard MLflow tooling can serve
+it; this project's services never import that logged code (see ``registry.load_model``).
 
 ``FraudModel.predict`` returns *calibrated probabilities*: a score of 0.2 means roughly
 a 20% chance of fraud, so decision thresholds are meaningful business settings.

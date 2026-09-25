@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import mlflow
 import pandas as pd
 from mlflow.exceptions import MlflowException
+from mlflow.models import Model
 from mlflow.tracking import MlflowClient
 
 if TYPE_CHECKING:
@@ -68,20 +69,44 @@ def resolve_alias(client: MlflowClient, name: str, alias: str) -> ModelRef | Non
 
 
 def load_model(uri: str, version: str | None = None) -> LoadedModel:
-    """Load a logged ``FraudModel`` and expose its fast NumPy scoring path."""
-    from fraud_detection.modeling import FraudModel
+    """Load a logged fraud model from its native artifacts.
 
-    pyfunc_model = mlflow.pyfunc.load_model(uri)
-    python_model = pyfunc_model.unwrap_python_model()
-    if not isinstance(python_model, FraudModel) or python_model.scorer is None:
-        raise TypeError(f"{uri} is not a fraud_detection FraudModel")
+    Only data is read: the ``MLmodel`` YAML (safe loader), XGBoost JSON, LightGBM text
+    and calibration JSON. The pyfunc wrapper's logged code is never imported and nothing
+    is unpickled, so a tampered registry entry cannot execute code in this process; the
+    scoring code always comes from the installed package.
+    """
+    from fraud_detection.modeling import EnsembleScorer
+
+    with tempfile.TemporaryDirectory() as tmp:
+        local = Path(mlflow.artifacts.download_artifacts(artifact_uri=uri, dst_path=tmp))
+        metadata = Model.load(str(local))
+        flavor = metadata.flavors.get("python_function") or {}
+        config = flavor.get("config") or {}
+        try:
+            artifacts = {
+                name: _inside(local, spec["path"]) for name, spec in flavor["artifacts"].items()
+            }
+            feature_columns = [str(column) for column in config["feature_columns"]]
+            n_threads = int(config["n_threads"]) if config.get("n_threads") else None
+            scorer = EnsembleScorer.load(artifacts, feature_columns, n_threads)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise TypeError(f"{uri} is not a fraud_detection model: {exc!r}") from exc
     return LoadedModel(
-        scorer=python_model.scorer,
+        scorer=scorer,
         uri=uri,
         version=version or uri,
-        run_id=pyfunc_model.metadata.run_id,
+        run_id=metadata.run_id,
         loaded_at=time.time(),
     )
+
+
+def _inside(root: Path, relative: str) -> str:
+    """Resolve an artifact path from ``MLmodel``, refusing anything outside the model."""
+    path = (root / relative).resolve()
+    if not path.is_relative_to(root.resolve()):
+        raise ValueError(f"artifact path escapes the model directory: {relative}")
+    return str(path)
 
 
 def download_reference(run_id: str) -> pd.DataFrame:

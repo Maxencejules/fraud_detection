@@ -12,7 +12,7 @@ from mlflow.tracking import MlflowClient
 from fraud_detection.bootstrap import run_bootstrap
 from fraud_detection.config import BootstrapSettings, TrainerSettings
 from fraud_detection.features import FEATURE_COLUMNS
-from fraud_detection.registry import download_reference, load_model, resolve_alias
+from fraud_detection.registry import _inside, download_reference, load_model, resolve_alias
 from fraud_detection.simulation import DAY
 from fraud_detection.trainer import decide_promotion, main, train_and_register
 
@@ -104,6 +104,31 @@ def test_train_register_promote_and_compare(dataset: Path, tracking: str) -> Non
     assert champion.run_id is not None
     reference = download_reference(champion.run_id)
     assert {"label", "prediction", *FEATURE_COLUMNS} <= set(reference.columns)
+
+
+def test_loading_never_executes_code_from_the_registry(dataset: Path, tracking: str) -> None:
+    settings = TrainerSettings(
+        mlflow_tracking_uri=tracking, data_path=dataset, warmup_days=5, min_pr_auc=0.05
+    )
+    client = MlflowClient()
+    train_and_register(settings, client)
+    stored_code = list(Path(tracking.removeprefix("file://")).rglob("model_code.py"))
+    assert stored_code  # the pyfunc wrapper's code is stored with the model
+    for path in stored_code:  # simulate a tampered registry entry
+        path.write_text('raise RuntimeError("code from the registry was executed")\n')
+
+    champion = resolve_alias(client, settings.model_name, settings.model_alias)
+    assert champion is not None
+    loaded = load_model(champion.uri, champion.version)
+
+    assert loaded.feature_columns == FEATURE_COLUMNS
+    assert loaded.run_id is not None
+
+
+def test_artifact_paths_cannot_escape_the_model_directory(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="escapes"):
+        _inside(tmp_path, "../outside.json")
+    assert _inside(tmp_path, "artifacts/xgboost.json").startswith(str(tmp_path.resolve()))
 
 
 def test_champion_that_cannot_be_loaded_is_not_replaced(
