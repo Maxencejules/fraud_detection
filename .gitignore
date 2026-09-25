@@ -1,19 +1,26 @@
+# Python
 __pycache__/
-.pytest_cache/
-pytest-cache-files-*/
+*.py[cod]
 .venv/
-.playwright-cli/
-mlflow.db
-reports/*
-!reports/.gitkeep
-output/*
-!output/runtime/
-output/runtime/*
-!output/runtime/artifact_summary.json
-!output/runtime/benchmark_latest.json
-!output/screenshots/
-output/screenshots/*
-!output/screenshots/evidently_report.png
-!output/screenshots/mlflow_monitoring.png
-!output/screenshots/mlflow_training.png
-data/*.parquet
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# Local configuration and generated data
+.env
+data/
+reports/
+mlruns/
+benchmark*.json
+!docs/results/*.json
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
