@@ -48,7 +48,7 @@ services:
   # --- infrastructure -----------------------------------------------------------------
   kafka:
     <<: *logging
-    image: apache/kafka:4.1.0
+    image: apache/kafka:4.3.1
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
