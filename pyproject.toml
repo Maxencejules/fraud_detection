@@ -33,7 +33,7 @@ serving = [
     "lightgbm>=4.7",
     "mlflow-skinny>=3.4",
     "pandas>=2.2",
-    "uvicorn[standard]>=0.34",
+    "uvicorn[standard]>=0.53.0",
     # xgboost-cpu has no macOS wheels; the regular package does not pull CUDA libraries there.
     "xgboost-cpu>=3.0; sys_platform != 'darwin'",
     "xgboost>=3.0; sys_platform == 'darwin'",
