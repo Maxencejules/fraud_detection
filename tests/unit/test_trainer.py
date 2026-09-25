@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import NoReturn
 
 import fakeredis
 import mlflow
@@ -34,6 +35,25 @@ class TestPromotionRule:
 
     def test_minimum_improvement_is_respected(self) -> None:
         assert not decide_promotion(0.705, 0.70, min_pr_auc=0.3, min_improvement=0.01).promote
+
+    def test_unevaluable_champion_defers_promotion(self) -> None:
+        decision = decide_promotion(
+            0.9,
+            None,
+            min_pr_auc=0.3,
+            min_improvement=0.0,
+            champion_error="champion version 1 could not be evaluated (OSError)",
+        )
+        assert decision.promote is False
+        assert decision.outcome == "deferred"
+        assert "could not be evaluated" in decision.reason
+
+    def test_quality_gate_applies_before_deferral(self) -> None:
+        decision = decide_promotion(
+            0.2, None, min_pr_auc=0.3, min_improvement=0.0, champion_error="unavailable"
+        )
+        assert decision.outcome == "rejected"
+        assert "quality gate" in decision.reason
 
 
 @pytest.fixture(scope="module")
@@ -84,6 +104,33 @@ def test_train_register_promote_and_compare(dataset: Path, tracking: str) -> Non
     assert champion.run_id is not None
     reference = download_reference(champion.run_id)
     assert {"label", "prediction", *FEATURE_COLUMNS} <= set(reference.columns)
+
+
+def test_champion_that_cannot_be_loaded_is_not_replaced(
+    dataset: Path, tracking: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = TrainerSettings(
+        mlflow_tracking_uri=tracking, data_path=dataset, warmup_days=5, min_pr_auc=0.05
+    )
+    client = MlflowClient()
+    assert train_and_register(settings, client).promote is True
+
+    def artifact_store_down(uri: str, version: str | None = None) -> NoReturn:
+        raise OSError("artifact store unreachable")
+
+    monkeypatch.setattr("fraud_detection.trainer.load_model", artifact_store_down)
+    decision = train_and_register(settings, client)
+
+    assert decision.outcome == "deferred"
+    champion = resolve_alias(client, settings.model_name, settings.model_alias)
+    challenger = resolve_alias(client, settings.model_name, "challenger")
+    assert champion is not None
+    assert champion.version == "1"
+    assert challenger is not None
+    assert challenger.version == "2"
+    tags = client.get_model_version(settings.model_name, "2").tags
+    assert tags["promotion"] == "deferred"
+    assert "could not be evaluated (OSError)" in tags["promotion_reason"]
 
 
 def test_rejected_models_are_parked_as_challenger(dataset: Path, tracking: str) -> None:

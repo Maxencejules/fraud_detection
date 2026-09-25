@@ -107,8 +107,10 @@ associated with fraud.
 The simulator runs in event time. The live producer paces events in wall-clock time
 (`EMIT_RATE_TPS`), which speeds up simulated time (at 20 TPS a simulated day passes
 in roughly four minutes). Features only ever use event time, so online and offline
-behaviour stay identical. The producer stores its simulation clock in Redis, so a
-restart continues the timeline instead of replaying it.
+behaviour stay identical. The producer checkpoints its simulation clock in Redis, so a
+restart continues the timeline instead of replaying it. A checkpoint is saved only after
+Kafka has acknowledged every event up to it, so events that were never delivered are not
+skipped after a crash.
 
 ## Model lifecycle
 
@@ -150,8 +152,11 @@ sequenceDiagram
   feature contract; the predictor refuses a model whose features differ from its own.
 - **Champion/challenger.** A new version only takes the `champion` alias if its test
   PR-AUC clears `MIN_PR_AUC` and is at least the champion's PR-AUC *on the same test
-  period*. Rejected versions get the `challenger` alias. Rolling back means pointing
-  the alias at a previous version; the predictor follows within one poll interval.
+  period*. Rejected versions get the `challenger` alias. If the champion exists but
+  cannot be loaded or scored (for example, the artifact store is unreachable),
+  promotion is deferred: the new version also gets `challenger`, and nothing is
+  promoted without the comparison. Rolling back means pointing the alias at a previous
+  version; the predictor follows within one poll interval.
 
 ## Delivery semantics and failure handling
 
@@ -170,6 +175,7 @@ idempotent and decisions are keyed by `transaction_id`. Producers use idempotenc
 | Failure | Behaviour |
 |---|---|
 | Malformed or invalid message | Published to `transactions.dlq` with stage, error and origin; the batch continues. |
+| Producer cannot deliver | Clock checkpoints wait until Kafka acknowledges every event. The producer exits on a delivery failure, and after the restart resumes from the last acknowledged event time. |
 | Redis or Kafka outage | Retried with capped exponential backoff, never dead-lettered; the process exits (and restarts) if the outage outlasts the retry budget, without committing. |
 | Predictor unavailable (no model yet, restarting) | The scorer backs off and retries without committing: the stream pauses instead of dropping events. |
 | Subscribed topic missing | Logged and retried. librdkafka reports this as a consumer error; the original consumer exited on it. |

@@ -67,6 +67,13 @@ MODEL_CODE_PATH = Path(__file__).with_name("model_code.py")
 class PromotionDecision:
     promote: bool
     reason: str
+    deferred: bool = False
+
+    @property
+    def outcome(self) -> str:
+        if self.promote:
+            return "promoted"
+        return "deferred" if self.deferred else "rejected"
 
 
 def decide_promotion(
@@ -75,12 +82,20 @@ def decide_promotion(
     *,
     min_pr_auc: float,
     min_improvement: float,
+    champion_error: str | None = None,
 ) -> PromotionDecision:
-    """Champion/challenger rule. Both scores must come from the same test data."""
+    """Champion/challenger rule. Both scores must come from the same test data.
+
+    ``champion_pr_auc`` is None when there is no comparable champion. ``champion_error``
+    means a champion exists but could not be evaluated: promotion is then deferred
+    rather than decided without the comparison.
+    """
     if challenger_pr_auc < min_pr_auc:
         return PromotionDecision(
             False, f"PR-AUC {challenger_pr_auc:.4f} is below the quality gate {min_pr_auc:.4f}"
         )
+    if champion_error is not None:
+        return PromotionDecision(False, f"promotion deferred: {champion_error}", deferred=True)
     if champion_pr_auc is None:
         return PromotionDecision(True, "no comparable champion")
     if challenger_pr_auc >= champion_pr_auc + min_improvement:
@@ -194,11 +209,12 @@ def _installed(distribution: str) -> bool:
 
 
 def _score_champion(champion: ModelRef, test: pd.DataFrame) -> np.ndarray | None:
-    try:
-        loaded = load_model(champion.uri, champion.version)
-    except Exception:
-        logger.exception("champion_load_failed", extra={"uri": champion.uri})
-        return None
+    """The champion's probabilities on ``test``; None if it uses another feature contract.
+
+    Load and scoring errors propagate: a champion that exists but cannot be evaluated
+    must not be mistaken for a missing one.
+    """
+    loaded = load_model(champion.uri, champion.version)
     if loaded.feature_columns != FEATURE_COLUMNS:
         logger.warning("champion_feature_contract_differs", extra={"uri": champion.uri})
         return None
@@ -294,16 +310,25 @@ def train_and_register(settings: TrainerSettings, client: MlflowClient) -> Promo
 
     champion = resolve_alias(client, settings.model_name, settings.model_alias)
     champion_pr_auc: float | None = None
+    champion_error: str | None = None
     if champion is not None:
-        champion_probability = _score_champion(champion, split.test)
-        if champion_probability is not None:
-            champion_pr_auc = binary_metrics(y_test, champion_probability, thresholds)["pr_auc"]
+        try:
+            champion_probability = _score_champion(champion, split.test)
+        except Exception as exc:
+            logger.exception("champion_evaluation_failed", extra={"uri": champion.uri})
+            champion_error = (
+                f"champion version {champion.version} could not be evaluated ({type(exc).__name__})"
+            )
+        else:
+            if champion_probability is not None:
+                champion_pr_auc = binary_metrics(y_test, champion_probability, thresholds)["pr_auc"]
 
     decision = decide_promotion(
         test_metrics["pr_auc"],
         champion_pr_auc,
         min_pr_auc=settings.min_pr_auc,
         min_improvement=settings.min_improvement,
+        champion_error=champion_error,
     )
     alias = settings.model_alias if decision.promote else CHALLENGER_ALIAS
     client.set_registered_model_alias(settings.model_name, alias, new_version)
@@ -312,7 +337,7 @@ def train_and_register(settings: TrainerSettings, client: MlflowClient) -> Promo
         "champion_pr_auc_on_same_test": "n/a"
         if champion_pr_auc is None
         else f"{champion_pr_auc:.5f}",
-        "promotion": "promoted" if decision.promote else "rejected",
+        "promotion": decision.outcome,
         "promotion_reason": decision.reason,
         "training_run_id": run.info.run_id,
     }

@@ -2,8 +2,10 @@
 
 Events carry simulated *event time* (``timestamp``) plus the wall-clock time they were
 published (``emitted_at``), which downstream services use to measure end-to-end latency.
-The simulation clock is persisted in Redis so a restart continues the timeline instead
-of replaying already-processed event times.
+The simulation clock is checkpointed in Redis so a restart continues the timeline instead
+of replaying it. A checkpoint is written only after Kafka has acknowledged every event up
+to it, so a crash or a failed delivery never leaves a gap: the restart resumes from the
+last acknowledged event time.
 """
 
 from __future__ import annotations
@@ -18,7 +20,13 @@ from confluent_kafka.admin import AdminClient
 from prometheus_client import Counter, Gauge
 
 from fraud_detection.config import ProducerSettings
-from fraud_detection.kafka_utils import GracefulShutdown, ensure_topics, producer_config
+from fraud_detection.kafka_utils import (
+    DeliveryError,
+    DeliveryTracker,
+    GracefulShutdown,
+    ensure_topics,
+    producer_config,
+)
 from fraud_detection.observability import configure_logging, start_metrics_server
 from fraud_detection.schemas import RawTransaction
 from fraud_detection.simulation import TransactionSimulator
@@ -32,6 +40,8 @@ DELIVERY_FAILURES = Counter("fraud_producer_delivery_failures_total", "Unacknowl
 SIMULATED_TIME = Gauge("fraud_producer_simulated_time_seconds", "Event time of the last message.")
 
 CLOCK_SAVE_INTERVAL_S = 1.0
+CHECKPOINT_FLUSH_TIMEOUT_S = 10.0
+FINAL_FLUSH_TIMEOUT_S = 30.0
 
 
 class Pacer:
@@ -52,12 +62,6 @@ class Pacer:
         return wait
 
 
-def _on_delivery(err: KafkaError | None, _msg: Message) -> None:
-    if err is not None:
-        DELIVERY_FAILURES.inc()
-        logger.error("delivery_failed", extra={"error": str(err)})
-
-
 def publish(
     producer: Producer,
     topic: str,
@@ -66,12 +70,36 @@ def publish(
     rate_per_s: float,
     shutdown: GracefulShutdown,
     save_clock: Callable[[float], None],
+    checkpoint_interval_s: float = CLOCK_SAVE_INTERVAL_S,
 ) -> int:
-    """Publish ``transactions`` until the iterator ends or shutdown is requested."""
+    """Publish ``transactions`` until the iterator ends or shutdown is requested.
+
+    Every ``checkpoint_interval_s`` the producer flushes and saves the event time of the
+    newest event, but only when every event so far has been acknowledged. Raises
+    :class:`DeliveryError`, without advancing the clock, when a delivery fails or events
+    are still unacknowledged at the end.
+    """
     pacer = Pacer(rate_per_s)
+    tracker = DeliveryTracker()
+
+    def on_delivery(err: KafkaError | None, msg: Message) -> None:
+        if err is not None:
+            DELIVERY_FAILURES.inc()
+            logger.error("delivery_failed", extra={"error": str(err)})
+        tracker(err, msg)
+
+    def checkpoint(event_time: float, timeout_s: float) -> int:
+        """Save ``event_time`` if everything is acknowledged; return the count still queued."""
+        remaining = producer.flush(timeout_s)
+        tracker.raise_for_failures()
+        if remaining == 0:
+            save_clock(event_time)
+        return remaining
+
     published = 0
-    last_event_time: float | None = None
-    last_save = time.monotonic()
+    last_event_time = 0.0
+    unsaved = False  # events produced since the last saved checkpoint
+    last_checkpoint = time.monotonic()
     for tx in transactions:
         if shutdown.wait(pacer.delay()):
             break
@@ -79,7 +107,7 @@ def publish(
         while True:
             try:
                 producer.produce(
-                    topic, key=tx.user_id, value=event.model_dump_json(), on_delivery=_on_delivery
+                    topic, key=tx.user_id, value=event.model_dump_json(), on_delivery=on_delivery
                 )
                 break
             except BufferError:  # local queue full: let the client drain it
@@ -87,16 +115,20 @@ def publish(
         producer.poll(0)
         published += 1
         last_event_time = tx.timestamp
+        unsaved = True
         EVENTS.labels(kind="fraud" if tx.is_fraud else "legit").inc()
         SIMULATED_TIME.set(tx.timestamp)
-        if time.monotonic() - last_save >= CLOCK_SAVE_INTERVAL_S:
-            save_clock(tx.timestamp)
-            last_save = time.monotonic()
-    remaining = producer.flush(10)
-    if remaining:
-        logger.error("unflushed_messages", extra={"count": remaining})
-    if last_event_time is not None:
-        save_clock(last_event_time)
+        if time.monotonic() - last_checkpoint >= checkpoint_interval_s:
+            queued = checkpoint(tx.timestamp, CHECKPOINT_FLUSH_TIMEOUT_S)
+            if queued:  # broker slow or unreachable: keep the previous checkpoint
+                logger.warning("checkpoint_deferred", extra={"queued": queued})
+            else:
+                unsaved = False
+            last_checkpoint = time.monotonic()
+    if unsaved:
+        queued = checkpoint(last_event_time, FINAL_FLUSH_TIMEOUT_S)
+        if queued:
+            raise DeliveryError(f"{queued} messages still queued after flush; clock not saved")
     return published
 
 
