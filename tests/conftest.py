@@ -164,6 +164,7 @@ class FakeProducer:
         self.messages: list[tuple[str, Any, Any]] = []
         self.failing_topics: set[str] = set()
         self.buffer_errors = 0
+        self.stalled = False  # broker unreachable: nothing gets acknowledged
         self._pending: list[tuple[Any, str]] = []
 
     def produce(
@@ -177,6 +178,8 @@ class FakeProducer:
             self._pending.append((on_delivery, topic))
 
     def _deliver(self) -> int:
+        if self.stalled:
+            return 0
         pending, self._pending = self._pending, []
         for callback, topic in pending:
             error = FakeKafkaError(1, name="DELIVERY") if topic in self.failing_topics else None
@@ -188,7 +191,7 @@ class FakeProducer:
 
     def flush(self, timeout: float | None = None) -> int:
         self._deliver()
-        return 0
+        return len(self._pending)
 
     def values(self, topic: str) -> list[Any]:
         return [value for t, _, value in self.messages if t == topic]

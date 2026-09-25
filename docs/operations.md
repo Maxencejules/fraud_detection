@@ -39,9 +39,10 @@ All host ports bind to `127.0.0.1`.
 
 **Retrain.** `make train` (or `docker compose run --rm trainer python -m fraud_detection.trainer`)
 trains on the bootstrapped dataset, scores the current champion on the same test
-period and moves the `champion` alias only if the new version is not worse. The
-predictor picks up a new champion within `MODEL_POLL_INTERVAL_S` (15 s in Compose)
-without a restart; its log shows `model_loaded` with the new version.
+period and moves the `champion` alias only if the new version is not worse. If the
+champion cannot be evaluated, the alias stays where it is. The predictor picks up a new
+champion within `MODEL_POLL_INTERVAL_S` (15 s in Compose) without a restart; its log
+shows `model_loaded` with the new version.
 
 **Roll back.** Point the alias at an earlier version; the predictor follows on its next
 poll:
@@ -80,6 +81,7 @@ history with `--reset`, which deletes the feature store keys first. Then retrain
 | Symptom | Likely cause | What to do |
 |---|---|---|
 | `/ready` returns 503 with `no model registered` | No champion yet: the trainer has not finished, or its model failed the quality gate. | `docker compose logs trainer`; look for `training_completed` and its `reason`. |
+| Trainer logs `champion_evaluation_failed`; the new version has tag `promotion=deferred` | The current champion could not be loaded or scored, so the new version was not compared and not promoted. | Check `mlflow` health and its artifact volume, then run `make train` again, or compare the versions and move the alias yourself. |
 | `/ready` returns 503 with a load error | The artifact store is unreachable, or the model's feature contract differs from the service. | Check the `mlflow` health and `docker compose logs predictor` (`model_load_failed`). |
 | Scorer logs `operation_retry` for `predictor` | The predictor is down or has no model. Events are held, not lost. | Fix the predictor; the scorer resumes automatically. |
 | Scorer logs HTTP 4xx and exits | Predictor and scorer disagree on the API contract (version skew). | Deploy both from the same version. |
