@@ -1,9 +1,0 @@
-pytest
-fastapi
-uvicorn
-pandas
-numpy
-httpx
-pyarrow
-prometheus-client
-requests
