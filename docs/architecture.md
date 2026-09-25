@@ -141,13 +141,13 @@ sequenceDiagram
   dropped (rolling windows still filling), then the history is split 70/15/15 into
   train, validation and test. Random splits would put rows of the same fraud burst on
   both sides and inflate the metrics.
-- **Model.** XGBoost and LightGBM (early stopping on validation PR-AUC), probabilities
-  averaged. On the reference dataset the two tie on validation (0.766 vs 0.766 for the
+- **Model.** XGBoost and LightGBM with early stopping on validation PR-AUC (each keeps
+  only the trees up to its best iteration), probabilities averaged. On the reference dataset the two tie on validation (0.766 vs 0.767 for the
   average), so no single-model selection is made on noise.
 - **Calibration.** Platt scaling on the logit, fitted on the validation period. It is
   strictly monotone, so it never reorders transactions. Isotonic regression was
-  evaluated and rejected: it collapsed ~24k distinct test scores into 29 plateaus,
-  cost 0.021 PR-AUC and worsened log loss.
+  evaluated and rejected: it collapsed ~24k distinct test scores into 47 plateaus,
+  cost 0.028 PR-AUC and worsened log loss.
 - **Packaging.** Artifacts are stored in native formats (XGBoost JSON, LightGBM text,
   calibration JSON), wrapped in an MLflow pyfunc logged with *models from code* so that
   standard MLflow tooling can serve it. The services never use that wrapper: they read
@@ -233,6 +233,6 @@ unencrypted, and credentials are development defaults. See the
 | Component | How it scales |
 |---|---|
 | feature-processor, scorer | Add replicas up to the partition count (6); users are sharded by key. |
-| predictor | Stateless; run more replicas behind a load balancer. One process sustained ~480 req/s on a 4-vCPU host shared with the whole stack. |
+| predictor | Stateless; run more replicas behind a load balancer. One process sustained ~460 req/s on a 4-vCPU host shared with the whole stack. |
 | Redis | Keys are cluster-ready; per-user state is bounded by the 32-day retention. |
 | monitor | One instance per model; windows are in memory and bounded. |

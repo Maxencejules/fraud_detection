@@ -51,11 +51,11 @@ dropped because rolling windows (up to 32 days) are still filling there.
 
 | Metric | Value |
 |---|---|
-| PR-AUC (average precision) | **0.792** (95% CI 0.707–0.853) |
+| PR-AUC (average precision) | **0.791** (95% CI 0.706–0.852) |
 | ROC-AUC | 0.987 |
-| Recall at 1% false-positive rate | 0.850 |
-| Brier score | 0.00374 |
-| Log loss | 0.0157 |
+| Recall at 1% false-positive rate | 0.845 |
+| Brier score | 0.00375 |
+| Log loss | 0.0158 |
 
 The confidence interval comes from a cluster bootstrap over users (200 resamples):
 fraud arrives in per-user bursts, so resampling rows would understate the
@@ -66,29 +66,30 @@ differences of a few hundredths of PR-AUC between runs as noise.
 
 | Threshold | Action | Precision | Recall | Share of traffic flagged |
 |---|---|---|---|---|
-| 0.1 | `REVIEW` or `BLOCK` | 0.51 | 0.80 | 1.53% |
+| 0.1 | `REVIEW` or `BLOCK` | 0.49 | 0.80 | 1.57% |
 | 0.9 | `BLOCK` | 0.96 | 0.47 | 0.47% |
 
-Other points on the precision-recall curve: 0.29 precision at 0.89 recall
-(p ≥ 0.022), 0.71 at 0.74 (p ≥ 0.23), 0.95 at 0.50 (p ≥ 0.87). The full curve is logged
+Other points on the precision-recall curve: 0.27 precision at 0.89 recall
+(p ≥ 0.020), 0.71 at 0.74 (p ≥ 0.23), 0.95 at 0.50 (p ≥ 0.87). The full curve is logged
 as `evaluation/precision_recall.csv`. The thresholds are a business choice
 (review capacity versus losses) and can be changed without retraining.
 
 ### Calibration
 
 Probabilities are calibrated: across deciles of predicted risk, the mean prediction and
-the observed fraud rate agree (top decile: 0.095 predicted, 0.093 observed; see
-`evaluation/reliability.csv`). The fitted Platt parameters (slope 0.98, intercept 0.27)
-show that the averaged boosters were already close to calibrated, because they are
-trained on log loss without class re-weighting. Calibration stays in the pipeline as a
-safeguard that never reorders transactions.
+the observed fraud rate agree (top decile: 0.095 predicted, 0.094 observed; see
+`evaluation/reliability.csv`). The fitted Platt parameters (slope 1.00, intercept 0.31)
+only nudge the log-odds up. The averaged boosters are trained on log loss without class
+re-weighting, so they are close to calibrated already: the Brier score is 0.00375 before
+and after calibration. Calibration stays in the pipeline as a safeguard that never
+reorders transactions.
 
 ### Design choices backed by this evaluation
 
 | Choice | Evidence |
 |---|---|
-| Platt scaling instead of isotonic regression | Isotonic calibration collapsed ~24k distinct test scores into 29 plateaus, cutting PR-AUC from 0.792 to 0.771 and worsening log loss (0.0163 vs 0.0157). Platt scaling is strictly monotone. |
-| Keep the two-model average | Validation PR-AUC: XGBoost 0.766, LightGBM 0.752, average 0.766. On the test period XGBoost alone scored 0.801, but the validation data cannot tell it apart from the average, so choosing it would be selection on noise. |
+| Platt scaling instead of isotonic regression | Isotonic calibration collapsed ~24k distinct test scores into 47 plateaus, cutting PR-AUC from 0.791 to 0.763 and worsening log loss (0.0164 vs 0.0158). Platt scaling is strictly monotone. |
+| Keep the two-model average | Validation PR-AUC: XGBoost 0.766, LightGBM 0.752, average 0.767. On the test period XGBoost alone scored 0.799, but the validation data cannot tell it apart from the average, so choosing it would be selection on noise. |
 | Out-of-time split | A random split would place transactions from the same fraud burst in both train and test. |
 
 ### Most influential features
@@ -98,7 +99,7 @@ Share of total split gain, averaged over both boosters:
 | Feature | Share |
 |---|---|
 | `tx_count_1h` | 0.23 |
-| `merchant_fraud_rate_30d` | 0.18 |
+| `merchant_fraud_rate_30d` | 0.19 |
 | `seconds_since_last_tx` | 0.16 |
 | `card_present` | 0.12 |
 | `amount_zscore` | 0.08 |

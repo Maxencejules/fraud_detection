@@ -84,16 +84,16 @@ fraud; the model never saw that period during training. Full details are in the
 | PR-AUC | **0.79** (95% CI 0.71–0.85) |
 | ROC-AUC | 0.987 |
 | Recall at a 1% false-positive rate | 0.85 |
-| `REVIEW` or `BLOCK` (p ≥ 0.1) | precision 0.51, recall 0.80, 1.5% of traffic flagged |
+| `REVIEW` or `BLOCK` (p ≥ 0.1) | precision 0.49, recall 0.80, 1.6% of traffic flagged |
 | `BLOCK` (p ≥ 0.9) | precision 0.96, recall 0.47 |
 
 | Latency and throughput | p50 | p95 | p99 |
 |---|---|---|---|
-| `/v1/predict`, one request at a time (server time) | 0.9 ms | 1.8 ms | 3.1 ms |
-| `/v1/predict`, 8 concurrent clients (client time), 482 req/s | 15.7 ms | 22.9 ms | 35.8 ms |
-| Producer → published decision, 20 transactions/s | 71 ms | 167 ms | 233 ms |
+| `/v1/predict`, one request at a time (server time) | 0.9 ms | 1.5 ms | 2.4 ms |
+| `/v1/predict`, 8 concurrent clients (client time), 459 req/s | 16.2 ms | 23.7 ms | 35.3 ms |
+| Producer → published decision, 20 transactions/s | 71 ms | 148 ms | 230 ms |
 
-Batch scoring (`/v1/predict/batch`, 50 per request) sustained about 16,000
+Batch scoring (`/v1/predict/batch`, 50 per request) sustained about 15,000
 transactions/s. All figures come from a 4-vCPU virtual machine that also ran the entire stack
 and the load generator, so treat them as an order of magnitude, not a capacity plan.
 The raw results are in [`docs/results/`](docs/results/); reproduce them with

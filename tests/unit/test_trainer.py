@@ -6,15 +6,23 @@ from typing import NoReturn
 import fakeredis
 import mlflow
 import numpy as np
+import pandas as pd
 import pytest
 from mlflow.tracking import MlflowClient
 
 from fraud_detection.bootstrap import run_bootstrap
 from fraud_detection.config import BootstrapSettings, TrainerSettings
+from fraud_detection.evaluation import temporal_split
 from fraud_detection.features import FEATURE_COLUMNS
 from fraud_detection.registry import _inside, download_reference, load_model, resolve_alias
 from fraud_detection.simulation import DAY
-from fraud_detection.trainer import decide_promotion, main, train_and_register
+from fraud_detection.trainer import (
+    decide_promotion,
+    main,
+    train_and_register,
+    train_ensemble,
+    xgboost_params,
+)
 
 END = 1_767_225_600.0 + 40 * DAY
 
@@ -73,6 +81,19 @@ def tracking(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
     mlflow.set_tracking_uri(uri)
     return uri
+
+
+def test_boosters_keep_only_their_early_stopped_trees(dataset: Path) -> None:
+    split = temporal_split(
+        pd.read_parquet(dataset), warmup_days=5, validation_fraction=0.15, test_fraction=0.15
+    )
+
+    scorer, info = train_ensemble(split, seed=42)
+
+    best_rounds = int(info["xgb_best_iteration"]) + 1
+    assert best_rounds < xgboost_params(42)["n_estimators"]  # early stopping did trigger
+    assert scorer.xgb_booster.num_boosted_rounds() == best_rounds
+    assert scorer.lgb_booster.current_iteration() >= int(info["lgb_best_iteration"])
 
 
 def test_train_register_promote_and_compare(dataset: Path, tracking: str) -> None:

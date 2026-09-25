@@ -38,7 +38,7 @@ class LogitCalibrator:
     Strictly increasing for ``slope > 0``, so it never changes the ranking of
     transactions (PR-AUC and alert ordering are preserved) while correcting the
     probability scale. Isotonic regression was evaluated and rejected: its step
-    function collapsed ~24k distinct test scores into 29 plateaus and lost ~0.02 PR-AUC.
+    function collapsed ~24k distinct test scores into 47 plateaus and lost ~0.03 PR-AUC.
     """
 
     slope: float = 1.0
