@@ -144,7 +144,7 @@ make test-integration     # tests against the running stack
 
 | Test layer | What it covers |
 |---|---|
-| Unit (168 tests) | Features, simulator, model, trainer, predictor API, every stream processor with Kafka test doubles. |
+| Unit | Features, simulator, model, trainer, predictor API, every stream processor with Kafka test doubles. |
 | Dependency boundaries | Each service imports with only its own dependency group installed. |
 | Integration | Real Redis matches the offline feature store; a transaction flows from `transactions.raw` to a decision; malformed messages reach the DLQ; the champion loads from the registry. |
 | End to end (CI) | Builds every image, runs the full stack, the smoke and integration tests and a benchmark. |
