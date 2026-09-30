@@ -1,0 +1,154 @@
+{
+  "checks": {
+    "native_reload_absolute_tolerance": 1e-12,
+    "native_reload_max_abs_difference": 0.0,
+    "same_seed_and_changed_test_labels_max_abs_difference": 0.0
+  },
+  "class_counts": {
+    "test": {
+      "positives": 10,
+      "rows": 2001
+    },
+    "train": {
+      "positives": 47,
+      "rows": 9339
+    },
+    "validation": {
+      "positives": 13,
+      "rows": 2001
+    }
+  },
+  "data_kind": "synthetic simulator output; no real fraud evidence",
+  "environment": {
+    "machine": "AMD64",
+    "packages": {
+      "fakeredis": "2.38.0",
+      "lightgbm": "4.7.0",
+      "mlflow-skinny": "3.16.1",
+      "numpy": "2.5.3",
+      "pandas": "3.0.6",
+      "scikit-learn": "1.9.1",
+      "xgboost-cpu": "3.4.1"
+    },
+    "platform": "Windows-11-10.0.26100-SP0",
+    "python": "3.12.10",
+    "training_threads": 1
+  },
+  "feature_store": {
+    "key_prefix": "fd",
+    "label_delay_seconds": 172800,
+    "merchant_prior_rate": 0.01,
+    "merchant_prior_weight": 50.0,
+    "merchant_retention_slack_days": 30,
+    "merchant_window_days": 30
+  },
+  "features": [
+    "amount",
+    "amount_log",
+    "amount_zscore",
+    "tx_count_1h",
+    "tx_count_24h",
+    "tx_sum_1h",
+    "tx_sum_24h",
+    "unique_merchants_24h",
+    "unique_countries_7d",
+    "seconds_since_last_tx",
+    "is_new_country",
+    "hour_of_day",
+    "day_of_week",
+    "is_weekend",
+    "card_present",
+    "merchant_fraud_rate_30d",
+    "user_chargeback_rate"
+  ],
+  "fitted": {
+    "calibration_intercept": 2.530129156168091,
+    "calibration_slope": 1.503431574329684,
+    "lgb_best_iteration": 20.0,
+    "xgb_best_iteration": 53.0
+  },
+  "history": {
+    "days": 28,
+    "end": 1770681600.0,
+    "rows": 16297,
+    "warmup_days": 5
+  },
+  "metrics": {
+    "base_rate": 0.004997501249375313,
+    "block_flag_rate": 0.0004997501249375312,
+    "block_precision": 1.0,
+    "block_recall": 0.1,
+    "brier": 0.003214023929349006,
+    "log_loss": 0.015686576298365482,
+    "pr_auc": 0.6565165688622931,
+    "recall_at_1pct_fpr": 0.7,
+    "review_flag_rate": 0.015992003998001,
+    "review_precision": 0.21875,
+    "review_recall": 0.7,
+    "roc_auc": 0.9561526870919137,
+    "rows": 2001.0
+  },
+  "pr_auc_cluster_interval": {
+    "confidence": 0.95,
+    "high": 0.9644494047619048,
+    "low": 0.025520104897467106,
+    "requested_resamples": 200,
+    "users": 375,
+    "valid_resamples": 200
+  },
+  "recorded_run": {
+    "byte_identical_raw_files": 6,
+    "execution": "Local Windows verification before the source changes were committed; not a GitHub CI result",
+    "independent_executions": 2,
+    "raw_report_sha256": "20228dc5de4e14cab3f1baa08e6c21132e36907c07b92fc289e614d8952e1cd0",
+    "source_checkout": "dirty pre-commit workspace based on 96626bcb397cefe9d7d1ac4201cf2a312489db59",
+    "source_identity": "sha256.source_utf8_lf records actual source content; no eventual commit SHA is asserted"
+  },
+  "sha256": {
+    "dataset_csv_utf8_lf_float17g": "d1a91be82554a388262874bc23ef5c91b7bef053767ce9b031eb82265c9814eb",
+    "native_artifacts": {
+      "calibrator.json": "15e38533d30823907593b6f5cd0f0219bcba01d599ac33f3904498c7b2f062b8",
+      "lightgbm.txt": "e5e1a72f5cd42acb5b2b5a0f078024fb1e8a9ae5bb8b60f8bdd6e936b41e561b",
+      "xgboost.json": "463824b4a4197a9f81c62fd97e7679f817ac8189e11e1dc86ed336b4b1b87b27"
+    },
+    "predictions_csv": "5f9dc42c7adc7cba14f0ef43a0b41df85cab03feae20939596d2f60c48225441",
+    "source_utf8_lf": {
+      "scripts/offline_validation.py": "1ec9a59bb373425036b7176d17b3e1e7dbc28ddace173cf2494fc73db78deadc",
+      "src/fraud_detection/bootstrap.py": "1dd8b6eff133a0b40e719956d35529617a0b41ecd7f14509964477cb855ea025",
+      "src/fraud_detection/config.py": "94a852766e4bc5f35a45f217c594ac2024ca3782fa787aba08a40e7b9019510c",
+      "src/fraud_detection/evaluation.py": "216b175672671e14e2dbcaaba7028f32446ef92955c98448ce225121cf50aef9",
+      "src/fraud_detection/features.py": "9684c7aec1941cb5bf43a0f8d0446e574ba006c859a859495cf983e37f8f7207",
+      "src/fraud_detection/modeling.py": "610de2fe910872aedbfa7ace2e7a9f7c6e87ddc4ccf37d6044d56043dc2f5ba1",
+      "src/fraud_detection/schemas.py": "a2024ade58e9c08207f99da76f4a80f1f229ff1a0c8878bc49bc68237277960f",
+      "src/fraud_detection/simulation.py": "236e108fd4acd421cb993f4f968004f990917ebb3ebb2e28f0930b8e973b0f4b",
+      "src/fraud_detection/trainer.py": "839a8d5f5796eef12d4cbfdcae25fca3245f02eacc0892232bf235a59ee3bce2"
+    }
+  },
+  "simulation": {
+    "ato_rate_per_user_day": 0.0012,
+    "high_risk_merchant_share": 0.08,
+    "large_purchase_prob": 0.02,
+    "mean_tx_per_user_per_day": 1.5,
+    "n_merchants": 120,
+    "n_users": 400,
+    "opportunistic_fraud_prob": 0.003,
+    "risky_user_ato_multiplier": 10.0,
+    "risky_user_share": 0.05,
+    "seed": 42,
+    "travel_prob": 0.03
+  },
+  "split": {
+    "test_end": 1770681085.31,
+    "test_fraud_rate": 0.004997501249375313,
+    "test_rows": 2001.0,
+    "test_start": 1770386207.15,
+    "train_end": 1770106325.724,
+    "train_fraud_rate": 0.005032658742906092,
+    "train_rows": 9339.0,
+    "train_start": 1768695037.123,
+    "validation_end": 1770385922.081,
+    "validation_fraud_rate": 0.006496751624187906,
+    "validation_rows": 2001.0,
+    "validation_start": 1770106440.521
+  }
+}

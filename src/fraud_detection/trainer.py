@@ -37,7 +37,7 @@ from fraud_detection.config import DecisionThresholds, TrainerSettings
 from fraud_detection.evaluation import (
     TemporalSplit,
     binary_metrics,
-    bootstrap_interval,
+    bootstrap_result,
     fit_logit_calibration,
     precision_recall_table,
     reliability_table,
@@ -138,7 +138,9 @@ def lightgbm_params(seed: int) -> dict[str, Any]:
     }
 
 
-def train_ensemble(split: TemporalSplit, seed: int) -> tuple[EnsembleScorer, dict[str, float]]:
+def train_ensemble(
+    split: TemporalSplit, seed: int, *, n_threads: int | None = None
+) -> tuple[EnsembleScorer, dict[str, float]]:
     """Fit both boosters with early stopping and calibrate their average on validation."""
     x_train, y_train = split.train[list(FEATURE_COLUMNS)].astype(float), split.train["label"]
     x_valid, y_valid = (
@@ -146,13 +148,18 @@ def train_ensemble(split: TemporalSplit, seed: int) -> tuple[EnsembleScorer, dic
         split.validation["label"],
     )
 
-    xgb_model = xgb.XGBClassifier(**xgboost_params(seed))
+    if n_threads is not None and n_threads < 1:
+        raise ValueError("n_threads must be positive")
+    xgb_options, lgb_options = xgboost_params(seed), lightgbm_params(seed)
+    if n_threads is not None:
+        xgb_options["n_jobs"] = lgb_options["n_jobs"] = n_threads
+    xgb_model = xgb.XGBClassifier(**xgb_options)
     xgb_model.fit(x_train, y_train, eval_set=[(x_valid, y_valid)], verbose=False)
     # Early stopping only records the best round: the booster still holds the extra rounds,
     # and native prediction (inplace_predict, the saved JSON) would use all of them.
     xgb_booster = xgb_model.get_booster()[: xgb_model.best_iteration + 1]
 
-    lgb_model = lgb.LGBMClassifier(**lightgbm_params(seed))
+    lgb_model = lgb.LGBMClassifier(**lgb_options)
     lgb_model.fit(
         x_train,
         y_train,
@@ -164,12 +171,12 @@ def train_ensemble(split: TemporalSplit, seed: int) -> tuple[EnsembleScorer, dic
 
     # LightGBM's booster already predicts with, and saves, only its best iteration.
     uncalibrated = EnsembleScorer(
-        xgb_booster, lgb_model.booster_, LogitCalibrator.identity(), FEATURE_COLUMNS
+        xgb_booster, lgb_model.booster_, LogitCalibrator.identity(), FEATURE_COLUMNS, n_threads
     )
     valid_scores = uncalibrated.raw_scores(to_matrix(split.validation, FEATURE_COLUMNS))
     calibrator = fit_logit_calibration(valid_scores, split.validation["label"].to_numpy())
     scorer = EnsembleScorer(
-        uncalibrated.xgb_booster, uncalibrated.lgb_booster, calibrator, FEATURE_COLUMNS
+        uncalibrated.xgb_booster, uncalibrated.lgb_booster, calibrator, FEATURE_COLUMNS, n_threads
     )
     info = {
         "xgb_best_iteration": float(xgb_model.best_iteration),
@@ -241,8 +248,15 @@ def train_and_register(settings: TrainerSettings, client: MlflowClient) -> Promo
     y_test = split.test["label"].to_numpy()
     test_probability = scorer.predict_proba(x_test)
     test_metrics = binary_metrics(y_test, test_probability, thresholds)
-    test_metrics["pr_auc_ci_low"], test_metrics["pr_auc_ci_high"] = bootstrap_interval(
+    interval = bootstrap_result(
         y_test, test_probability, split.test["user_id"].to_numpy(), seed=settings.seed
+    )
+    test_metrics.update(
+        pr_auc_ci_low=interval.low,
+        pr_auc_ci_high=interval.high,
+        pr_auc_bootstrap_valid_resamples=float(interval.valid_resamples),
+        pr_auc_bootstrap_requested_resamples=float(interval.requested_resamples),
+        pr_auc_bootstrap_users=float(interval.users),
     )
     uncalibrated_brier = binary_metrics(y_test, scorer.raw_scores(x_test), thresholds)["brier"]
     component_pr_auc = {

@@ -269,7 +269,7 @@ def test_publish_to_mlflow_logs_metrics_and_artifacts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
-    mlflow.set_tracking_uri(f"file://{tmp_path / 'mlruns'}")
+    mlflow.set_tracking_uri((tmp_path / "mlruns").as_uri())
     monitor = DriftMonitor(
         settings, lambda: Reference("1", scored_history), publish_to_mlflow(settings)
     )

@@ -28,17 +28,15 @@ from mlflow.pyfunc.model import PythonModel
 ARTIFACT_XGB = "xgboost_model"
 ARTIFACT_LGB = "lightgbm_model"
 ARTIFACT_CALIBRATOR = "calibrator"
-_EPSILON = 1e-7
 
 
 @dataclass(frozen=True)
 class LogitCalibrator:
     """Platt scaling on the logit: ``p' = sigmoid(slope * logit(p) + intercept)``.
 
-    Strictly increasing for ``slope > 0``, so it never changes the ranking of
-    transactions (PR-AUC and alert ordering are preserved) while correcting the
-    probability scale. Isotonic regression was evaluated and rejected: its step
-    function collapsed ~24k distinct test scores into 47 plateaus and lost ~0.03 PR-AUC.
+    Increasing for ``slope > 0`` in exact arithmetic. Endpoint-aware arithmetic
+    avoids an arbitrary probability floor; extreme outputs can still round to 0/1
+    at floating-point precision. Identity calibration preserves the scores exactly.
     """
 
     slope: float = 1.0
@@ -55,9 +53,15 @@ class LogitCalibrator:
         return cls(1.0, 0.0)
 
     def __call__(self, scores: np.ndarray) -> np.ndarray:
-        p = np.clip(np.asarray(scores, dtype=np.float64), _EPSILON, 1.0 - _EPSILON)
-        z = self.slope * np.log(p / (1.0 - p)) + self.intercept
-        return np.asarray(1.0 / (1.0 + np.exp(-z)), dtype=np.float64)
+        p = np.asarray(scores, dtype=np.float64)
+        if not np.isfinite(p).all() or ((p < 0) | (p > 1)).any():
+            raise ValueError("calibrator probabilities must be finite and in [0, 1]")
+        if self.slope == 1.0 and self.intercept == 0.0:
+            return p.copy()
+        with np.errstate(divide="ignore", over="ignore"):
+            z = self.slope * (np.log(p) - np.log1p(-p)) + self.intercept
+        exponential = np.exp(-np.abs(z))
+        return np.asarray(np.where(z >= 0, 1 / (1 + exponential), exponential / (1 + exponential)))
 
     def to_json(self) -> str:
         return json.dumps({"type": "logit", "slope": self.slope, "intercept": self.intercept})

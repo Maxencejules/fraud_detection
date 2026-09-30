@@ -210,13 +210,13 @@ def test_client_configs_enforce_at_least_once_defaults() -> None:
 def test_graceful_shutdown_handles_signals() -> None:
     import signal
 
-    previous = signal.getsignal(signal.SIGUSR1)
+    previous = signal.getsignal(signal.SIGTERM)
     try:
-        shutdown = GracefulShutdown(signals=(signal.SIGUSR1,))
+        shutdown = GracefulShutdown(signals=(signal.SIGTERM,))
         before = shutdown.requested
-        signal.raise_signal(signal.SIGUSR1)
+        signal.raise_signal(signal.SIGTERM)
         after = shutdown.requested
         assert (before, after) == (False, True)
         assert shutdown.wait(0) is True
     finally:
-        signal.signal(signal.SIGUSR1, previous)
+        signal.signal(signal.SIGTERM, previous)
