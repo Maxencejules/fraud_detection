@@ -77,7 +77,7 @@ def dataset(tmp_path_factory: pytest.TempPathFactory) -> Path:
 @pytest.fixture
 def tracking(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setenv("MLFLOW_ALLOW_FILE_STORE", "true")
-    uri = f"file://{tmp_path / 'mlruns'}"
+    uri = (tmp_path / "mlruns").as_uri()
     monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
     mlflow.set_tracking_uri(uri)
     return uri
@@ -127,13 +127,15 @@ def test_train_register_promote_and_compare(dataset: Path, tracking: str) -> Non
     assert {"label", "prediction", *FEATURE_COLUMNS} <= set(reference.columns)
 
 
-def test_loading_never_executes_code_from_the_registry(dataset: Path, tracking: str) -> None:
+def test_loading_never_executes_code_from_the_registry(
+    dataset: Path, tracking: str, tmp_path: Path
+) -> None:
     settings = TrainerSettings(
         mlflow_tracking_uri=tracking, data_path=dataset, warmup_days=5, min_pr_auc=0.05
     )
     client = MlflowClient()
     train_and_register(settings, client)
-    stored_code = list(Path(tracking.removeprefix("file://")).rglob("model_code.py"))
+    stored_code = list((tmp_path / "mlruns").rglob("model_code.py"))
     assert stored_code  # the pyfunc wrapper's code is stored with the model
     for path in stored_code:  # simulate a tampered registry entry
         path.write_text('raise RuntimeError("code from the registry was executed")\n')

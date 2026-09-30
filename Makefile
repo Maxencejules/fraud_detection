@@ -38,6 +38,10 @@ audit: ## Scan locked dependencies for known vulnerabilities
 .PHONY: check
 check: lint typecheck test ## Everything CI checks before the Docker stage
 
+.PHONY: validate-offline
+validate-offline: ## Fixed-seed synthetic training, held-out-label and native reload checks
+	uv run python scripts/offline_validation.py
+
 # --- Docker stack ------------------------------------------------------------------
 
 .PHONY: up

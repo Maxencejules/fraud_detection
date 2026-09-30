@@ -1,9 +1,17 @@
 # Model card: `fraud-detector`
 
-All numbers below come from one reproducible run of the pipeline in this repository:
+The numerical tables below are **previously documented baseline results**, present
+in source commit `96626bcb397cefe9d7d1ac4201cf2a312489db59` before the current
+evaluation and calibration repairs. The original model predictions are not checked
+in, and these figures have not been independently re-measured for the current code.
+The baseline described one run of the pipeline:
 `HISTORY_END=1767225600` (history ending 2026-01-01 00:00 UTC), default settings,
-package version 1.0.0. Re-running `docker compose up` with the same settings produces
-the same dataset and the same model; the trainer logs every figure below to MLflow.
+package version 1.0.0. Pin the dataset settings and dependency lock to reproduce an
+experiment within its recorded environment. Cross-platform bitwise equality is not
+promised. Current bounded evidence is produced by
+[`scripts/offline_validation.py`](../scripts/offline_validation.py); its small-fixture
+metrics are separate from these archived tables. See the
+[evaluation contract](evaluation-contract.md) for checks and limitations.
 
 ## Model details
 
@@ -44,7 +52,10 @@ card-not-present fraud) are described in the
 | Test | 2025-12-26 to 2026-01-01 | 24,059 | 0.97% |
 
 The split is **out-of-time**: the model never sees data from after its training period,
-and the test period is untouched until the final evaluation. The first ten days are
+and evaluation rows are held out from fitting. Early stopping and calibration both
+use the validation period; promotion uses the evaluation period. Repeated promotion
+on that same period makes it a selection set, so a fresh future period is required
+for a final generalization claim. The first ten days are
 dropped because rolling windows (up to 32 days) are still filling there.
 
 ## Evaluation (test period)
@@ -57,10 +68,13 @@ dropped because rolling windows (up to 32 days) are still filling there.
 | Brier score | 0.00375 |
 | Log loss | 0.0158 |
 
-The confidence interval comes from a cluster bootstrap over users (200 resamples):
+The confidence interval comes from a cluster bootstrap over users (200 requested resamples):
 fraud arrives in per-user bursts, so resampling rows would understate the
 uncertainty. The test period holds about 230 fraudulent transactions. Treat
 differences of a few hundredths of PR-AUC between runs as noise.
+Current runs also report valid two-class replicate counts and user count. Replicates
+containing only one class are discarded, so the percentile interval is conditional
+on both classes being present and does not account for adaptive promotion.
 
 ### Operating points
 
@@ -79,10 +93,12 @@ as `evaluation/precision_recall.csv`. The thresholds are a business choice
 Probabilities are calibrated: across deciles of predicted risk, the mean prediction and
 the observed fraud rate agree (top decile: 0.095 predicted, 0.094 observed; see
 `evaluation/reliability.csv`). The fitted Platt parameters (slope 1.00, intercept 0.31)
-only nudge the log-odds up. The averaged boosters are trained on log loss without class
+only nudged the log-odds up in that archived run. The averaged boosters are trained
+on log loss without class
 re-weighting, so they are close to calibrated already: the Brier score is 0.00375 before
-and after calibration. Calibration stays in the pipeline as a safeguard that never
-reorders transactions.
+and after calibration. The current serving transform avoids the old fixed `1e-7`
+floor and preserves identity scores exactly. It is increasing in exact arithmetic;
+extreme outputs can still round to 0/1 at floating-point precision.
 
 ### Design choices backed by this evaluation
 

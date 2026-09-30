@@ -12,6 +12,10 @@ model contract and the API all changed. To upgrade, delete the old stack with it
 
 ### Breaking changes
 
+- Training/evaluation now reject repeated transaction identities, nonfinite times,
+  nonbinary labels and invalid probabilities instead of silently coercing them.
+  Timestamp groups remain intact at temporal boundaries, so achieved split sizes
+  can change for coarse timestamps.
 - The predictor API moved under `/v1`:
   - `POST /predict` is now `POST /v1/predict`.
   - `POST /reload-model` is now `POST /v1/admin/reload`. It is disabled unless
@@ -29,6 +33,9 @@ model contract and the API all changed. To upgrade, delete the old stack with it
 
 ### Added
 
+- A bounded offline synthetic training/native-reload audit with data, prediction,
+  source and model fingerprints, environment metadata and native CI artifacts.
+- Requested/valid user-cluster bootstrap replicate counts and user count in training metrics.
 - A population-based transaction simulator with account-takeover, card-testing and
   opportunistic fraud.
 - A `bootstrap` job that replays simulated history through the production feature
@@ -48,6 +55,10 @@ model contract and the API all changed. To upgrade, delete the old stack with it
 
 ### Fixed
 
+- Removed fixed score clipping from ranking/operating-point evaluation and serving
+  calibration, preserving tiny probabilities and exact identity endpoints.
+- Constant-score reliability reports retain their rows; invalid/undefined evaluation
+  and cluster-bootstrap inputs now fail explicitly.
 - The MLflow server failed to start because its image had no PostgreSQL driver.
 - Models were saved inside the training container instead of the MLflow artifact store,
   so the predictor could never load them.

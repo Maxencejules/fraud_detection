@@ -68,6 +68,21 @@ jobs:
         run: uv sync --locked --all-extras
       - name: Unit tests with coverage gate
         run: uv run pytest --cov --cov-report=term --cov-report=xml
+      - name: Offline synthetic training and native-artifact validation
+        if: matrix.python-version == '3.12'
+        env:
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+          MKL_NUM_THREADS: "1"
+          MLFLOW_DISABLE_AGENT_HINT: "1"
+        run: uv run python scripts/offline_validation.py
+      - name: Upload offline validation evidence
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: offline-validation
+          path: reports/offline-validation/
+          retention-days: 14
       - name: Upload coverage report
         if: matrix.python-version == '3.12'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

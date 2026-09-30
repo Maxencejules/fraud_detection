@@ -73,8 +73,21 @@ The response contains `fraud_probability`, `decision`, `model_version` and `late
 
 ## Results
 
-Measured from a clean `docker compose up` with `HISTORY_END=1767225600`, which pins
-the simulated history, so the dataset and model are reproducible. The model was
+Current bounded evidence is available in a
+[recorded offline validation report](docs/results/offline-validation-windows.json):
+16,297 synthetic rows, 2,001 evaluation rows and 10 positives, with PR-AUC 0.657
+and a wide user-bootstrap interval of 0.026–0.964. Two independent runs produced
+identical data, predictions and native model files. This small fixture verifies
+the pipeline and artifacts; it does not establish real-world fraud performance.
+Run the [offline validation command](docs/evaluation-contract.md#bounded-offline-evidence)
+for current native artifacts and environment details.
+
+**Previously documented baseline results**, present in source commit
+`96626bcb397cefe9d7d1ac4201cf2a312489db59` before the evaluation/calibration
+repairs described in the [evaluation contract](docs/evaluation-contract.md).
+The original model predictions are not checked in, and these figures have not been
+independently re-measured for the current code. The baseline described a clean
+`docker compose up` with `HISTORY_END=1767225600`, which pins the simulated history. The model was
 evaluated on the final six days of that history, 24,059 transactions of which 0.97% are
 fraud; the model never saw that period during training. Full details are in the
 [model card](docs/model-card.md).
@@ -138,6 +151,7 @@ dependency group per service, locked with [uv](https://docs.astral.sh/uv/).
 ```bash
 uv sync --all-extras      # Python 3.12+, all dependencies
 make check                # ruff, mypy --strict, unit tests (85% coverage gate)
+make validate-offline     # fixed-seed synthetic train/evaluate/native-reload audit
 make up smoke             # full stack and end-to-end check
 make test-integration     # tests against the running stack
 ```
@@ -146,11 +160,19 @@ make test-integration     # tests against the running stack
 |---|---|
 | Unit | Features, simulator, model, trainer, predictor API, every stream processor with Kafka test doubles. |
 | Dependency boundaries | Each service imports with only its own dependency group installed. |
+| Offline validation | Real synthetic replay and two training runs, held-out-label perturbation, native model reload, fingerprints and environment metadata. |
 | Integration | Real Redis matches the offline feature store; a transaction flows from `transactions.raw` to a decision; malformed messages reach the DLQ; the champion loads from the registry. |
 | End to end (CI) | Builds every image, runs the full stack, the smoke and integration tests and a benchmark. |
 
 CI also enforces formatting, strict typing, a dependency vulnerability audit and
 Python 3.12/3.13 compatibility. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+For a service-free check, run `uv run python scripts/offline_validation.py`. It writes
+synthetic features, evaluation predictions, native models and `report.json` under
+`reports/offline-validation/`; CI uploads the same evidence. This smaller fixture
+checks reproducibility and fitting/serving agreement. Its quality metrics concern
+only the simulator; the [evaluation contract](docs/evaluation-contract.md) explains
+the split, bootstrap and model-selection assumptions.
 
 ```text
 src/fraud_detection/
