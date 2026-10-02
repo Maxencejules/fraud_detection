@@ -29,7 +29,7 @@ stream = [
 ]
 # Online inference API.
 serving = [
-    "fastapi>=0.115",
+    "fastapi>=0.142.0",
     "lightgbm>=4.7",
     "mlflow-skinny>=3.4",
     "pandas>=2.2",
