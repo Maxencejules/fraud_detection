@@ -264,7 +264,7 @@ services:
 
   grafana:
     <<: *logging
-    image: grafana/grafana:13.2.2
+    image: grafana/grafana:13.2.3
     profiles: [observability]
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
