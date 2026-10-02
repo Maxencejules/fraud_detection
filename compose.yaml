@@ -75,7 +75,7 @@ services:
 
   redis:
     <<: *logging
-    image: redis:8.2-alpine
+    image: redis:8.10-alpine
     # Online feature store: persist it, and never silently evict feature state.
     command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
     volumes: [redis_data:/data]
