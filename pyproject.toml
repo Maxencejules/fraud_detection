@@ -29,7 +29,7 @@ stream = [
 ]
 # Online inference API.
 serving = [
-    "fastapi>=0.115",
+    "fastapi>=0.142.2",
     "lightgbm>=4.7",
     "mlflow-skinny>=3.4",
     "pandas>=2.2",
@@ -40,7 +40,7 @@ serving = [
 ]
 # Historical simulation, Redis backfill and model training.
 training = [
-    "fakeredis>=2.26",
+    "fakeredis>=2.39.0",
     "lightgbm>=4.7",
     "mlflow-skinny>=3.4",
     "pandas>=2.2",
@@ -71,11 +71,11 @@ fraud-trainer = "fraud_detection.trainer:main"
 [dependency-groups]
 dev = [
     "httpx2>=2.13",
-    "mypy>=1.15",
+    "mypy>=2.4.0",
     "pandas-stubs>=2.2",
     "pytest>=8.3",
     "pytest-cov>=6.0",
-    "ruff>=0.11",
+    "ruff>=0.16.10",
 ]
 
 [build-system]
