@@ -14,25 +14,25 @@ classifiers = [
     "Private :: Do Not Upload",
 ]
 dependencies = [
-    "numpy>=2.1",
+    "numpy>=2.5.4",
     "prometheus-client>=0.21",
-    "pydantic>=2.10",
-    "pydantic-settings>=2.7",
+    "pydantic>=2.14.1",
+    "pydantic-settings>=2.16.1",
 ]
 
 [project.optional-dependencies]
 # Kafka/Redis workers: producer, feature processor, scorer.
 stream = [
-    "confluent-kafka>=2.8",
+    "confluent-kafka>=2.16.0",
     "httpx>=0.28",
     "redis[hiredis]>=5.2",
 ]
 # Online inference API.
 serving = [
-    "fastapi>=0.115",
+    "fastapi>=0.162.0",
     "lightgbm>=4.7",
-    "mlflow-skinny>=3.4",
-    "pandas>=2.2",
+    "mlflow-skinny>=3.17.2",
+    "pandas>=3.1.0",
     "uvicorn[standard]>=0.34",
     # xgboost-cpu has no macOS wheels; the regular package does not pull CUDA libraries there.
     "xgboost-cpu>=3.0; sys_platform != 'darwin'",
@@ -40,10 +40,10 @@ serving = [
 ]
 # Historical simulation, Redis backfill and model training.
 training = [
-    "fakeredis>=2.26",
+    "fakeredis>=2.40.0",
     "lightgbm>=4.7",
-    "mlflow-skinny>=3.4",
-    "pandas>=2.2",
+    "mlflow-skinny>=3.17.2",
+    "pandas>=3.1.0",
     "pyarrow>=18",
     "redis[hiredis]>=5.2",
     "scikit-learn>=1.6",
@@ -52,10 +52,10 @@ training = [
 ]
 # Drift and model-quality monitoring.
 monitoring = [
-    "confluent-kafka>=2.8",
+    "confluent-kafka>=2.16.0",
     "evidently>=0.7.10",
-    "mlflow-skinny>=3.4",
-    "pandas>=2.2",
+    "mlflow-skinny>=3.17.2",
+    "pandas>=3.1.0",
     "pyarrow>=18",
 ]
 
@@ -70,12 +70,12 @@ fraud-trainer = "fraud_detection.trainer:main"
 
 [dependency-groups]
 dev = [
-    "httpx2>=2.13",
-    "mypy>=1.15",
+    "httpx2>=2.16.0",
+    "mypy>=2.4.0",
     "pandas-stubs>=2.2",
     "pytest>=8.3",
     "pytest-cov>=6.0",
-    "ruff>=0.11",
+    "ruff>=0.17.3",
 ]
 
 [build-system]
