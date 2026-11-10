@@ -42,12 +42,7 @@ jobs:
       - name: Validate Compose file
         run: docker compose config --quiet
       - name: Dependency vulnerability audit
-        # Triaged exception: GHSA-8mgp-746c-j5xp (nltk, no fixed release yet). NLTK is only a
-        # transitive dependency of Evidently's text descriptors; this project never calls
-        # NLTK's model-artifact APIs. Remove the ignore once a fixed nltk is available.
-        run: >-
-          uv audit --preview-features audit-command --locked
-          --ignore GHSA-8mgp-746c-j5xp
+        run: uv audit --preview-features audit-command --locked
 
   test:
     name: Unit tests (Python ${{ matrix.python-version }})
